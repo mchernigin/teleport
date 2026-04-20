@@ -12,7 +12,7 @@ struct teleportApp: App {
     @StateObject private var viewModel = AppViewModel()
 
     var body: some Scene {
-        MenuBarExtra("teleport", systemImage: menuBarIcon) {
+        MenuBarExtra("Teleport", systemImage: menuBarIcon) {
             MenuBarView(viewModel: viewModel)
         }
         .menuBarExtraStyle(.window)

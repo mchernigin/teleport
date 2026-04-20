@@ -10,7 +10,7 @@ import SwiftUI
 struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("teleport")
+            Text("Teleport")
                 .font(.title2.bold())
             Text("This app runs from the menu bar. Open the status item to configure your VLESS link and control Xray.")
                 .foregroundStyle(.secondary)

@@ -24,7 +24,7 @@ struct MenuBarView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("teleport")
+            Text("Teleport")
                 .font(.headline)
             Text(viewModel.statusSummary)
                 .font(.caption)
