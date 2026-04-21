@@ -4,7 +4,7 @@ import Foundation
 import SystemConfiguration
 
 struct ConnectionLinkParser {
-    func parse(_ rawLink: String) throws -> ConnectionConfiguration {
+    nonisolated func parse(_ rawLink: String) throws -> ConnectionConfiguration {
         let trimmed = rawLink.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let components = URLComponents(string: trimmed),
               let scheme = components.scheme?.lowercased() else {
@@ -21,7 +21,7 @@ struct ConnectionLinkParser {
         }
     }
 
-    private func parseVLESS(_ rawLink: String, components: URLComponents) throws -> ConnectionConfiguration {
+    nonisolated private func parseVLESS(_ rawLink: String, components: URLComponents) throws -> ConnectionConfiguration {
         let base = try parseBase(rawLink, components: components)
 
         guard let user = components.user, !user.isEmpty else {
@@ -80,7 +80,7 @@ struct ConnectionLinkParser {
         )
     }
 
-    private func parseTrojan(_ rawLink: String, components: URLComponents) throws -> ConnectionConfiguration {
+    nonisolated private func parseTrojan(_ rawLink: String, components: URLComponents) throws -> ConnectionConfiguration {
         let base = try parseBase(rawLink, components: components)
         let query = try queryDictionary(from: components)
 
@@ -136,7 +136,7 @@ struct ConnectionLinkParser {
         )
     }
 
-    private func parseBase(_ rawLink: String, components: URLComponents) throws -> (host: String, port: Int, remarks: String?) {
+    nonisolated private func parseBase(_ rawLink: String, components: URLComponents) throws -> (host: String, port: Int, remarks: String?) {
         guard let host = components.host, !host.isEmpty else {
             throw ConfigurationError.missingHost
         }
@@ -150,7 +150,7 @@ struct ConnectionLinkParser {
         return (host, port, remarks)
     }
 
-    private func queryDictionary(from components: URLComponents) throws -> [String: String] {
+    nonisolated private func queryDictionary(from components: URLComponents) throws -> [String: String] {
         guard let queryItems = components.queryItems else {
             return [:]
         }
@@ -158,7 +158,7 @@ struct ConnectionLinkParser {
         return Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
     }
 
-    private func parseTransport(query: [String: String]) throws -> ConnectionTransport {
+    nonisolated private func parseTransport(query: [String: String]) throws -> ConnectionTransport {
         let transportRaw = (query["type"] ?? ConnectionTransport.tcp.rawValue).lowercased()
         guard let transport = ConnectionTransport(rawValue: transportRaw) else {
             throw ConfigurationError.unsupportedTransport(transportRaw)
@@ -166,7 +166,7 @@ struct ConnectionLinkParser {
         return transport
     }
 
-    private func parseALPN(query: [String: String]) -> [String] {
+    nonisolated private func parseALPN(query: [String: String]) -> [String] {
         query["alpn"]?.split(separator: ",").map { String($0) } ?? []
     }
 }
@@ -186,7 +186,7 @@ final class ConfigurationStore {
 
     func load() -> AppSnapshot {
         guard let data = try? Data(contentsOf: fileURL) else {
-            return AppSnapshot(savedConnections: [], selectedConnectionID: nil, proxyEndpoint: .default)
+            return AppSnapshot(savedConnections: [], subscriptionSources: [], selectedConnectionID: nil, proxyEndpoint: .default)
         }
 
         if let snapshot = try? decoder.decode(AppSnapshot.self, from: data) {
@@ -199,12 +199,163 @@ final class ConfigurationStore {
             return migratedSnapshot
         }
 
-        return AppSnapshot(savedConnections: [], selectedConnectionID: nil, proxyEndpoint: .default)
+        return AppSnapshot(savedConnections: [], subscriptionSources: [], selectedConnectionID: nil, proxyEndpoint: .default)
     }
 
     func save(_ snapshot: AppSnapshot) throws {
         let data = try encoder.encode(snapshot)
         try data.write(to: fileURL, options: .atomic)
+    }
+}
+
+struct SubscriptionImportResult {
+    let importedEntries: [ImportedSubscriptionEntry]
+    let skippedCount: Int
+}
+
+struct ImportedSubscriptionEntry {
+    let sourceEntryID: String
+    let configuration: ConnectionConfiguration
+}
+
+struct SubscriptionReplacementResult {
+    let savedConnections: [SavedConnection]
+    let selectedConnectionID: UUID?
+}
+
+struct SubscriptionConnectionReconciler {
+    func reconcile(
+        existingConnections: [SavedConnection],
+        sourceID: UUID,
+        selectedConnectionID: UUID?,
+        importedEntries: [ImportedSubscriptionEntry],
+        fetchedAt: Date,
+        autoSelectFirstImported: Bool
+    ) -> SubscriptionReplacementResult {
+        let previousSelectedConnection = existingConnections.first { $0.id == selectedConnectionID }
+        let previousImportedEntries = existingConnections.filter { $0.source?.subscriptionSourceID == sourceID }
+
+        let existingIDsByEntry: [String: UUID] = Dictionary(uniqueKeysWithValues: previousImportedEntries.compactMap { connection in
+            guard let source = connection.source else { return nil }
+            return (source.subscriptionEntryID, connection.id)
+        })
+        let existingSavedAtByEntry: [String: Date] = Dictionary(uniqueKeysWithValues: previousImportedEntries.compactMap { connection in
+            guard let source = connection.source else { return nil }
+            return (source.subscriptionEntryID, connection.savedAt)
+        })
+
+        let replacementConnections = importedEntries.map { entry in
+            SavedConnection(
+                id: existingIDsByEntry[entry.sourceEntryID] ?? UUID(),
+                configuration: entry.configuration,
+                savedAt: existingSavedAtByEntry[entry.sourceEntryID] ?? fetchedAt,
+                source: ConnectionSourceMetadata(subscriptionSourceID: sourceID, subscriptionEntryID: entry.sourceEntryID)
+            )
+        }
+        .sorted { lhs, rhs in
+            lhs.configuration.displayName.localizedCaseInsensitiveCompare(rhs.configuration.displayName) == .orderedAscending
+        }
+
+        var updatedConnections = existingConnections.filter { $0.source?.subscriptionSourceID != sourceID }
+        updatedConnections.append(contentsOf: replacementConnections)
+
+        let resolvedSelectedConnectionID: UUID?
+        if let previousSelectedConnection,
+           previousSelectedConnection.source?.subscriptionSourceID == sourceID {
+            let previousEntryID = previousSelectedConnection.source?.subscriptionEntryID
+            if let previousEntryID,
+               let matched = replacementConnections.first(where: { $0.source?.subscriptionEntryID == previousEntryID }) {
+                resolvedSelectedConnectionID = matched.id
+            } else if let firstReplacement = replacementConnections.first {
+                resolvedSelectedConnectionID = firstReplacement.id
+            } else {
+                resolvedSelectedConnectionID = updatedConnections.first?.id
+            }
+        } else if autoSelectFirstImported,
+                  selectedConnectionID == nil,
+                  let firstReplacement = replacementConnections.first {
+            resolvedSelectedConnectionID = firstReplacement.id
+        } else if let selectedConnectionID,
+                  updatedConnections.contains(where: { $0.id == selectedConnectionID }) {
+            resolvedSelectedConnectionID = selectedConnectionID
+        } else {
+            resolvedSelectedConnectionID = updatedConnections.first?.id
+        }
+
+        return SubscriptionReplacementResult(
+            savedConnections: updatedConnections,
+            selectedConnectionID: resolvedSelectedConnectionID
+        )
+    }
+}
+
+struct SubscriptionClient {
+    func fetchCandidateLinks(from url: URL) throws -> [String] {
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        let session = URLSession(configuration: .ephemeral)
+        let semaphore = DispatchSemaphore(value: 0)
+
+        var responseData: Data?
+        var response: URLResponse?
+        var responseError: Error?
+
+        let task = session.dataTask(with: request) { data, urlResponse, error in
+            responseData = data
+            response = urlResponse
+            responseError = error
+            semaphore.signal()
+        }
+
+        task.resume()
+        semaphore.wait()
+        session.finishTasksAndInvalidate()
+
+        if let responseError {
+            throw SubscriptionError.networkFailure(responseError.localizedDescription)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SubscriptionError.invalidResponse
+        }
+
+        guard (200 ... 299).contains(httpResponse.statusCode) else {
+            throw SubscriptionError.networkFailure("Subscription request failed with status \(httpResponse.statusCode)")
+        }
+
+        guard let responseData, !responseData.isEmpty else {
+            throw SubscriptionError.emptyPayload
+        }
+
+        let rawText = String(decoding: responseData, as: UTF8.self)
+        let directLinks = extractCandidateLinks(from: rawText)
+        if !directLinks.isEmpty {
+            return directLinks
+        }
+
+        let compactBase64 = rawText
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined()
+
+        if let decodedData = Data(base64Encoded: compactBase64, options: [.ignoreUnknownCharacters]) {
+            let decodedText = String(decoding: decodedData, as: UTF8.self)
+            let decodedLinks = extractCandidateLinks(from: decodedText)
+            if !decodedLinks.isEmpty {
+                return decodedLinks
+            }
+        }
+
+        throw SubscriptionError.noSupportedEntries
+    }
+
+    private func extractCandidateLinks(from text: String) -> [String] {
+        text
+            .split(whereSeparator: { $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { value in
+                let lowercased = value.lowercased()
+                return lowercased.hasPrefix("vless://") || lowercased.hasPrefix("trojan://")
+            }
     }
 }
 
@@ -347,7 +498,7 @@ struct XrayConfigurationWriter {
     }
 }
 
-final class XrayRuntimeManager {
+final class XrayRuntimeManager: @unchecked Sendable {
     private var process: Process?
     private var errorPipe: Pipe?
     private let bundle: Bundle
@@ -417,7 +568,7 @@ final class XrayRuntimeManager {
     }
 }
 
-final class SystemProxyService {
+final class SystemProxyService: @unchecked Sendable {
     private let processRunner: (Process) throws -> Void
 
     init(processRunner: @escaping (Process) throws -> Void = { try $0.run() }) {
@@ -517,24 +668,29 @@ final class SystemProxyService {
 final class AppViewModel: ObservableObject {
     @Published var draftLink: String = ""
     @Published private(set) var savedConnections: [SavedConnection]
+    @Published private(set) var subscriptionSources: [SubscriptionSource]
     @Published private(set) var selectedConnectionID: UUID?
     @Published private(set) var connectionPhase: ConnectionPhase = .unconfigured
     @Published private(set) var proxyPhase: ProxyPhase = .disabled
     @Published private(set) var lastError: String?
     @Published private(set) var proxyEndpoint: ProxyEndpoint
+    @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
 
     private let parser: ConnectionLinkParser
     private let store: ConfigurationStore
     private let runtimeManager: XrayRuntimeManager
     private let proxyService: SystemProxyService
+    private let subscriptionClient: SubscriptionClient
     private let operationQueue = DispatchQueue(label: "dev.x.teleport.connection-operations", qos: .userInitiated)
+    private var autoRefreshTimerCancellable: AnyCancellable?
 
     convenience init() {
         self.init(
             parser: ConnectionLinkParser(),
             store: ConfigurationStore(),
             runtimeManager: XrayRuntimeManager(),
-            proxyService: SystemProxyService()
+            proxyService: SystemProxyService(),
+            subscriptionClient: SubscriptionClient()
         )
     }
 
@@ -542,27 +698,36 @@ final class AppViewModel: ObservableObject {
         parser: ConnectionLinkParser,
         store: ConfigurationStore,
         runtimeManager: XrayRuntimeManager,
-        proxyService: SystemProxyService
+        proxyService: SystemProxyService,
+        subscriptionClient: SubscriptionClient
     ) {
         self.parser = parser
         self.store = store
         self.runtimeManager = runtimeManager
         self.proxyService = proxyService
+        self.subscriptionClient = subscriptionClient
 
         let snapshot = store.load()
-        self.proxyEndpoint = snapshot.proxyEndpoint
+        proxyEndpoint = snapshot.proxyEndpoint
+        subscriptionSources = snapshot.subscriptionSources
 
-        let normalizedConnections = snapshot.savedConnections.map { savedConnection in
+        savedConnections = snapshot.savedConnections.map { savedConnection in
             if let reparsedConfiguration = try? parser.parse(savedConnection.configuration.rawLink) {
-                return SavedConnection(id: savedConnection.id, configuration: reparsedConfiguration, savedAt: savedConnection.savedAt)
+                return SavedConnection(
+                    id: savedConnection.id,
+                    configuration: reparsedConfiguration,
+                    savedAt: savedConnection.savedAt,
+                    source: savedConnection.source
+                )
             }
             return savedConnection
         }
 
-        self.savedConnections = normalizedConnections
-        self.selectedConnectionID = snapshot.selectedConnectionID ?? normalizedConnections.first?.id
-        self.draftLink = ""
-        self.connectionPhase = normalizedConnections.isEmpty ? .unconfigured : .stopped
+        selectedConnectionID = snapshot.selectedConnectionID
+        draftLink = ""
+        normalizeSelection()
+        connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
+        startAutoRefreshTimer()
     }
 
     var selectedConnection: SavedConnection? {
@@ -572,6 +737,10 @@ final class AppViewModel: ObservableObject {
 
     var selectedConfiguration: ConnectionConfiguration? {
         selectedConnection?.configuration
+    }
+
+    var manualConnections: [SavedConnection] {
+        savedConnections.filter { $0.source == nil }
     }
 
     var canConnect: Bool {
@@ -593,7 +762,7 @@ final class AppViewModel: ObservableObject {
     var statusSummary: String {
         switch connectionPhase {
         case .unconfigured:
-            return savedConnections.isEmpty ? "Add a connection in Settings to get started" : "Select a connection to get started"
+            return savedConnections.isEmpty ? "Add a connection or subscription in Settings to get started" : "Select a connection to get started"
         case .ready, .stopped:
             return proxyPhase == .enabled ? "Connected" : "Disconnected"
         case .starting:
@@ -607,21 +776,38 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func addConnection() {
-        do {
-            let configuration = try parser.parse(draftLink)
-            let savedConnection = SavedConnection(id: UUID(), configuration: configuration, savedAt: Date())
-            savedConnections.append(savedConnection)
-            selectedConnectionID = savedConnection.id
-            draftLink = ""
-            connectionPhase = .stopped
-            lastError = nil
-            try persist()
-        } catch {
-            lastError = error.localizedDescription
-            if savedConnections.isEmpty {
-                connectionPhase = .unconfigured
+    func importedConnections(for sourceID: UUID) -> [SavedConnection] {
+        savedConnections
+            .filter { $0.source?.subscriptionSourceID == sourceID }
+            .sorted { lhs, rhs in
+                lhs.configuration.displayName.localizedCaseInsensitiveCompare(rhs.configuration.displayName) == .orderedAscending
             }
+    }
+
+    func importedConnectionCount(for sourceID: UUID) -> Int {
+        importedConnections(for: sourceID).count
+    }
+
+    func subscriptionSource(for connection: SavedConnection) -> SubscriptionSource? {
+        guard let sourceID = connection.source?.subscriptionSourceID else { return nil }
+        return subscriptionSources.first { $0.id == sourceID }
+    }
+
+    func isRefreshingSubscription(_ sourceID: UUID) -> Bool {
+        refreshingSubscriptionIDs.contains(sourceID)
+    }
+
+    func addConnection() {
+        let trimmed = draftLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            lastError = "Paste a connection or subscription URL first"
+            return
+        }
+
+        if looksLikeSubscriptionURL(trimmed) {
+            addSubscription(from: trimmed)
+        } else {
+            addManualConnection(from: trimmed)
         }
     }
 
@@ -633,17 +819,31 @@ final class AppViewModel: ObservableObject {
             return
         }
 
-        savedConnections.remove(at: index)
-
-        if selectedConnectionID == id {
-            selectedConnectionID = savedConnections.indices.contains(index) ? savedConnections[index].id : savedConnections.last?.id
+        let removedConnection = savedConnections.remove(at: index)
+        if selectedConnectionID == removedConnection.id {
+            recoverSelection(afterRemovingConnectionAt: index)
+        } else {
+            normalizeSelection()
         }
 
-        if savedConnections.isEmpty {
-            selectedConnectionID = nil
-            connectionPhase = .unconfigured
+        lastError = nil
+        persistSettingError()
+    }
+
+    func removeSubscription(id: UUID) {
+        let affectedConnections = importedConnections(for: id)
+
+        if !canChangeSelection,
+           affectedConnections.contains(where: { $0.id == selectedConnectionID }) {
+            lastError = "Disconnect before removing the active subscription"
+            return
         }
 
+        savedConnections.removeAll { $0.source?.subscriptionSourceID == id }
+        subscriptionSources.removeAll { $0.id == id }
+        refreshingSubscriptionIDs.remove(id)
+        normalizeSelection()
+        lastError = nil
         persistSettingError()
     }
 
@@ -659,6 +859,53 @@ final class AppViewModel: ObservableObject {
         }
         lastError = nil
         persistSettingError()
+    }
+
+    func refreshSubscription(id: UUID) {
+        refreshSubscription(id: id, autoSelectFirstImported: false)
+    }
+
+    func updateSubscriptionSettings(id: UUID, customName: String, urlString: String, autoUpdateIntervalMinutes: Int?) {
+        guard let existingSource = subscriptionSources.first(where: { $0.id == id }) else { return }
+
+        do {
+            let validatedURL = try validateSubscriptionURL(urlString)
+            let normalizedURL = validatedURL.absoluteString
+
+            if subscriptionSources.contains(where: { $0.id != id && $0.urlString.caseInsensitiveCompare(normalizedURL) == .orderedSame }) {
+                throw SubscriptionError.duplicateSource
+            }
+
+            let trimmedName = customName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let urlChanged = existingSource.urlString.caseInsensitiveCompare(normalizedURL) != .orderedSame
+
+            updateSubscriptionSource(id) { source in
+                source.title = trimmedName
+                source.urlString = normalizedURL
+                source.autoUpdateIntervalMinutes = autoUpdateIntervalMinutes
+                if urlChanged {
+                    source.lastError = nil
+                    source.lastRefreshedAt = nil
+                    source.lastSkippedCount = 0
+                }
+            }
+
+            if urlChanged {
+                savedConnections.removeAll { $0.source?.subscriptionSourceID == id }
+                if selectedConnection?.source?.subscriptionSourceID == id {
+                    normalizeSelection()
+                }
+            }
+
+            lastError = nil
+            persistSettingError()
+
+            if urlChanged {
+                refreshSubscription(id: id, autoSelectFirstImported: false)
+            }
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     func clearError() {
@@ -750,6 +997,251 @@ final class AppViewModel: ObservableObject {
         teardownConnection(resetError: true)
     }
 
+    private func addManualConnection(from rawLink: String) {
+        do {
+            let configuration = try parser.parse(rawLink)
+            let savedConnection = SavedConnection(id: UUID(), configuration: configuration, savedAt: Date(), source: nil)
+            savedConnections.append(savedConnection)
+            selectedConnectionID = savedConnection.id
+            draftLink = ""
+            connectionPhase = .stopped
+            lastError = nil
+            try persist()
+        } catch {
+            lastError = error.localizedDescription
+            if savedConnections.isEmpty {
+                connectionPhase = .unconfigured
+            }
+        }
+    }
+
+    private func addSubscription(from rawURL: String) {
+        do {
+            let url = try validateSubscriptionURL(rawURL)
+            let normalizedURL = url.absoluteString
+
+            if subscriptionSources.contains(where: { $0.urlString.caseInsensitiveCompare(normalizedURL) == .orderedSame }) {
+                throw SubscriptionError.duplicateSource
+            }
+
+            let source = SubscriptionSource(
+                id: UUID(),
+                urlString: normalizedURL,
+                title: subscriptionTitle(for: url),
+                savedAt: Date(),
+                autoUpdateIntervalMinutes: nil
+            )
+
+            subscriptionSources.append(source)
+            draftLink = ""
+            lastError = nil
+            persistSettingError()
+            refreshSubscription(id: source.id, autoSelectFirstImported: savedConnections.isEmpty)
+        } catch {
+            lastError = error.localizedDescription
+            if savedConnections.isEmpty {
+                connectionPhase = .unconfigured
+            }
+        }
+    }
+
+    private func refreshSubscription(id: UUID, autoSelectFirstImported: Bool) {
+        guard let source = subscriptionSources.first(where: { $0.id == id }) else { return }
+        guard let selectedConnection else {
+            startSubscriptionRefresh(for: source, autoSelectFirstImported: autoSelectFirstImported)
+            return
+        }
+
+        if !canChangeSelection,
+           selectedConnection.source?.subscriptionSourceID == id {
+            lastError = "Disconnect before refreshing the active subscription"
+            return
+        }
+
+        startSubscriptionRefresh(for: source, autoSelectFirstImported: autoSelectFirstImported)
+    }
+
+    private func startSubscriptionRefresh(for source: SubscriptionSource, autoSelectFirstImported: Bool) {
+        refreshingSubscriptionIDs.insert(source.id)
+        updateSubscriptionSource(source.id) {
+            $0.lastError = nil
+        }
+        lastError = nil
+        persistSettingError()
+
+        let parser = parser
+        let subscriptionClient = subscriptionClient
+
+        operationQueue.async { [weak self] in
+            do {
+                guard let url = URL(string: source.urlString) else {
+                    throw SubscriptionError.invalidURL
+                }
+
+                let links = try subscriptionClient.fetchCandidateLinks(from: url)
+                let importResult = try Self.importSubscriptionEntries(links: links, parser: parser, sourceID: source.id)
+
+                Task { @MainActor [weak self] in
+                    self?.applyImportedEntries(
+                        importResult.importedEntries,
+                        skippedCount: importResult.skippedCount,
+                        to: source.id,
+                        fetchedAt: Date(),
+                        autoSelectFirstImported: autoSelectFirstImported
+                    )
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.refreshingSubscriptionIDs.remove(source.id)
+                    self?.updateSubscriptionSource(source.id) {
+                        $0.lastError = error.localizedDescription
+                    }
+                    self?.lastError = error.localizedDescription
+                    self?.persistSettingError()
+                }
+            }
+        }
+    }
+
+    nonisolated private static func importSubscriptionEntries(
+        links: [String],
+        parser: ConnectionLinkParser,
+        sourceID: UUID
+    ) throws -> SubscriptionImportResult {
+        var importedEntries: [ImportedSubscriptionEntry] = []
+        var skippedCount = 0
+
+        for rawLink in links {
+            do {
+                let configuration = try parser.parse(rawLink)
+                importedEntries.append(
+                    ImportedSubscriptionEntry(
+                        sourceEntryID: rawLink.trimmingCharacters(in: .whitespacesAndNewlines),
+                        configuration: configuration
+                    )
+                )
+            } catch {
+                skippedCount += 1
+            }
+        }
+
+        _ = sourceID
+
+        guard !importedEntries.isEmpty else {
+            throw SubscriptionError.noSupportedEntries
+        }
+
+        return SubscriptionImportResult(importedEntries: importedEntries, skippedCount: skippedCount)
+    }
+
+    private func applyImportedEntries(
+        _ importedEntries: [ImportedSubscriptionEntry],
+        skippedCount: Int,
+        to sourceID: UUID,
+        fetchedAt: Date,
+        autoSelectFirstImported: Bool
+    ) {
+        let replacementResult = SubscriptionConnectionReconciler().reconcile(
+            existingConnections: savedConnections,
+            sourceID: sourceID,
+            selectedConnectionID: selectedConnectionID,
+            importedEntries: importedEntries,
+            fetchedAt: fetchedAt,
+            autoSelectFirstImported: autoSelectFirstImported
+        )
+
+        savedConnections = replacementResult.savedConnections
+        selectedConnectionID = replacementResult.selectedConnectionID
+
+        updateSubscriptionSource(sourceID) {
+            $0.lastRefreshedAt = fetchedAt
+            $0.lastSkippedCount = skippedCount
+            $0.lastError = skippedCount > 0 ? "Skipped \(skippedCount) unsupported entries during last refresh" : nil
+        }
+
+        refreshingSubscriptionIDs.remove(sourceID)
+        lastError = nil
+        connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
+        persistSettingError()
+    }
+
+    private func validateSubscriptionURL(_ rawURL: String) throws -> URL {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              let host = components.host,
+              !host.isEmpty,
+              let url = components.url else {
+            throw SubscriptionError.invalidURL
+        }
+        return url
+    }
+
+    private func subscriptionTitle(for url: URL) -> String {
+        if let host = url.host, !host.isEmpty {
+            return host
+        }
+        return url.absoluteString
+    }
+
+    private func looksLikeSubscriptionURL(_ value: String) -> Bool {
+        guard let scheme = URLComponents(string: value)?.scheme?.lowercased() else {
+            return false
+        }
+        return scheme == "http" || scheme == "https"
+    }
+
+    private func startAutoRefreshTimer() {
+        autoRefreshTimerCancellable = Timer.publish(every: 60, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.performScheduledSubscriptionRefreshes()
+            }
+    }
+
+    private func performScheduledSubscriptionRefreshes() {
+        let now = Date()
+
+        for source in subscriptionSources {
+            guard let intervalMinutes = source.autoUpdateIntervalMinutes,
+                  intervalMinutes > 0,
+                  !refreshingSubscriptionIDs.contains(source.id) else {
+                continue
+            }
+
+            let referenceDate = source.lastRefreshedAt ?? source.savedAt
+            guard now.timeIntervalSince(referenceDate) >= TimeInterval(intervalMinutes * 60) else {
+                continue
+            }
+
+            refreshSubscription(id: source.id, autoSelectFirstImported: false)
+        }
+    }
+
+    private func updateSubscriptionSource(_ id: UUID, mutate: (inout SubscriptionSource) -> Void) {
+        guard let index = subscriptionSources.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&subscriptionSources[index])
+    }
+
+    private func recoverSelection(afterRemovingConnectionAt index: Int) {
+        if savedConnections.indices.contains(index) {
+            selectedConnectionID = savedConnections[index].id
+        } else {
+            selectedConnectionID = savedConnections.last?.id
+        }
+        normalizeSelection()
+    }
+
+    private func normalizeSelection() {
+        if let selectedConnectionID,
+           savedConnections.contains(where: { $0.id == selectedConnectionID }) {
+            return
+        }
+
+        selectedConnectionID = savedConnections.first?.id
+    }
+
     private func teardownConnection(resetError: Bool) {
         let shouldDisableProxy = proxyPhase == .enabled || proxyPhase == .enabling || proxyPhase == .failed || proxyPhase == .disabling
 
@@ -797,6 +1289,7 @@ final class AppViewModel: ObservableObject {
     private func persist() throws {
         let snapshot = AppSnapshot(
             savedConnections: savedConnections,
+            subscriptionSources: subscriptionSources,
             selectedConnectionID: selectedConnectionID ?? savedConnections.first?.id,
             proxyEndpoint: proxyEndpoint
         )

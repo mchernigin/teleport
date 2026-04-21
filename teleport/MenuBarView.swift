@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct MenuBarView: View {
@@ -19,7 +20,7 @@ struct MenuBarView: View {
             }
         }
         .padding(14)
-        .frame(width: 340)
+        .frame(width: 360)
     }
 
     private var header: some View {
@@ -84,28 +85,86 @@ struct MenuBarView: View {
                     openWindow(id: "settings")
                 }
             } else {
-                Picker("Selected connection", selection: selectedConnectionBinding) {
-                    ForEach(viewModel.savedConnections) { connection in
-                        Text(connection.configuration.displayName)
-                            .tag(Optional(connection.id))
+                Menu {
+                    if !viewModel.manualConnections.isEmpty {
+                        Section("Saved connections") {
+                            ForEach(viewModel.manualConnections) { connection in
+                                connectionSelectionButton(connection)
+                            }
+                        }
                     }
+
+                    if !viewModel.subscriptionSources.isEmpty {
+                        Section("Subscriptions") {
+                            ForEach(viewModel.subscriptionSources) { source in
+                                subscriptionMenu(source)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(viewModel.selectedConnection?.configuration.displayName ?? "Select connection")
+                                .foregroundStyle(.primary)
+                            Text(connectionSubtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Image(systemName: "chevron.up.chevron.down")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                    )
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                .menuStyle(.borderlessButton)
                 .disabled(!viewModel.canChangeSelection)
             }
         }
     }
 
-    private var selectedConnectionBinding: Binding<UUID?> {
-        Binding(
-            get: { viewModel.selectedConnectionID },
-            set: { newValue in
-                if let newValue {
-                    viewModel.selectConnection(id: newValue)
+    private var connectionSubtitle: String {
+        guard let selectedConnection = viewModel.selectedConnection else {
+            return "Choose a connection"
+        }
+
+        if let source = viewModel.subscriptionSource(for: selectedConnection) {
+            return "From \(source.displayName)"
+        }
+
+        return "Manual connection"
+    }
+
+    @ViewBuilder
+    private func subscriptionMenu(_ source: SubscriptionSource) -> some View {
+        let connections = viewModel.importedConnections(for: source.id)
+        Menu("\(source.displayName) (\(connections.count))") {
+            if connections.isEmpty {
+                Button("No imported configs") {}
+                    .disabled(true)
+            } else {
+                ForEach(connections) { connection in
+                    connectionSelectionButton(connection)
                 }
             }
-        )
+        }
+    }
+
+    @ViewBuilder
+    private func connectionSelectionButton(_ connection: SavedConnection) -> some View {
+        Button {
+            viewModel.selectConnection(id: connection.id)
+        } label: {
+            let isSelected = connection.id == viewModel.selectedConnectionID
+            let prefix = isSelected ? "✓ " : ""
+            Text(prefix + connection.configuration.displayName)
+        }
     }
 
     private var actionSection: some View {

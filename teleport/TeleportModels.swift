@@ -78,16 +78,142 @@ struct ConnectionConfiguration: Codable, Equatable {
     }
 }
 
+struct ConnectionSourceMetadata: Codable, Equatable {
+    let subscriptionSourceID: UUID
+    let subscriptionEntryID: String
+}
+
 struct SavedConnection: Codable, Equatable, Identifiable {
     let id: UUID
     let configuration: ConnectionConfiguration
     let savedAt: Date
+    let source: ConnectionSourceMetadata?
+
+    var isImported: Bool {
+        source != nil
+    }
+
+    init(id: UUID, configuration: ConnectionConfiguration, savedAt: Date, source: ConnectionSourceMetadata? = nil) {
+        self.id = id
+        self.configuration = configuration
+        self.savedAt = savedAt
+        self.source = source
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case configuration
+        case savedAt
+        case source
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        configuration = try container.decode(ConnectionConfiguration.self, forKey: .configuration)
+        savedAt = try container.decode(Date.self, forKey: .savedAt)
+        source = try container.decodeIfPresent(ConnectionSourceMetadata.self, forKey: .source)
+    }
+}
+
+struct SubscriptionSource: Codable, Equatable, Identifiable {
+    let id: UUID
+    var urlString: String
+    var title: String
+    let savedAt: Date
+    var autoUpdateIntervalMinutes: Int?
+    var lastRefreshedAt: Date?
+    var lastError: String?
+    var lastSkippedCount: Int
+
+    var displayName: String {
+        if !title.isEmpty {
+            return title
+        }
+
+        if let url = URL(string: urlString), let host = url.host, !host.isEmpty {
+            return host
+        }
+
+        return urlString
+    }
+
+    init(
+        id: UUID,
+        urlString: String,
+        title: String,
+        savedAt: Date,
+        autoUpdateIntervalMinutes: Int? = nil,
+        lastRefreshedAt: Date? = nil,
+        lastError: String? = nil,
+        lastSkippedCount: Int = 0
+    ) {
+        self.id = id
+        self.urlString = urlString
+        self.title = title
+        self.savedAt = savedAt
+        self.autoUpdateIntervalMinutes = autoUpdateIntervalMinutes
+        self.lastRefreshedAt = lastRefreshedAt
+        self.lastError = lastError
+        self.lastSkippedCount = lastSkippedCount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case urlString
+        case title
+        case savedAt
+        case autoUpdateIntervalMinutes
+        case lastRefreshedAt
+        case lastError
+        case lastSkippedCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        urlString = try container.decode(String.self, forKey: .urlString)
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        savedAt = try container.decode(Date.self, forKey: .savedAt)
+        autoUpdateIntervalMinutes = try container.decodeIfPresent(Int.self, forKey: .autoUpdateIntervalMinutes)
+        lastRefreshedAt = try container.decodeIfPresent(Date.self, forKey: .lastRefreshedAt)
+        lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        lastSkippedCount = try container.decodeIfPresent(Int.self, forKey: .lastSkippedCount) ?? 0
+    }
 }
 
 struct AppSnapshot: Codable, Equatable {
     var savedConnections: [SavedConnection]
+    var subscriptionSources: [SubscriptionSource]
     var selectedConnectionID: UUID?
     var proxyEndpoint: ProxyEndpoint
+
+    init(
+        savedConnections: [SavedConnection],
+        subscriptionSources: [SubscriptionSource] = [],
+        selectedConnectionID: UUID?,
+        proxyEndpoint: ProxyEndpoint
+    ) {
+        self.savedConnections = savedConnections
+        self.subscriptionSources = subscriptionSources
+        self.selectedConnectionID = selectedConnectionID
+        self.proxyEndpoint = proxyEndpoint
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case savedConnections
+        case subscriptionSources
+        case selectedConnectionID
+        case proxyEndpoint
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        savedConnections = try container.decodeIfPresent([SavedConnection].self, forKey: .savedConnections) ?? []
+        subscriptionSources = try container.decodeIfPresent([SubscriptionSource].self, forKey: .subscriptionSources) ?? []
+        selectedConnectionID = try container.decodeIfPresent(UUID.self, forKey: .selectedConnectionID)
+        proxyEndpoint = try container.decodeIfPresent(ProxyEndpoint.self, forKey: .proxyEndpoint) ?? .default
+    }
 }
 
 enum ConfigurationError: LocalizedError, Equatable {
@@ -127,6 +253,32 @@ enum ConfigurationError: LocalizedError, Equatable {
             return "Missing required parameter: \(name)"
         case .malformedQuery:
             return "The connection link contains malformed query parameters"
+        }
+    }
+}
+
+enum SubscriptionError: LocalizedError, Equatable {
+    case invalidURL
+    case duplicateSource
+    case networkFailure(String)
+    case invalidResponse
+    case emptyPayload
+    case noSupportedEntries
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "Subscription URL must start with http:// or https://"
+        case .duplicateSource:
+            return "This subscription has already been added"
+        case let .networkFailure(message):
+            return message.isEmpty ? "Failed to fetch subscription" : message
+        case .invalidResponse:
+            return "Subscription server returned an invalid response"
+        case .emptyPayload:
+            return "Subscription did not contain any links"
+        case .noSupportedEntries:
+            return "Subscription does not contain any supported VLESS or Trojan links"
         }
     }
 }
@@ -192,13 +344,15 @@ extension LegacyAppSnapshot {
                 SavedConnection(
                     id: $0.configuration.id,
                     configuration: $0.configuration.asConnectionConfiguration,
-                    savedAt: $0.savedAt
+                    savedAt: $0.savedAt,
+                    source: nil
                 )
             ]
         } ?? []
 
         return AppSnapshot(
             savedConnections: savedConnections,
+            subscriptionSources: [],
             selectedConnectionID: savedConnections.first?.id,
             proxyEndpoint: proxyEndpoint
         )
