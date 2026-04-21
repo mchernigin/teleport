@@ -525,11 +525,20 @@ final class AppViewModel: ObservableObject {
     private let runtimeManager: XrayRuntimeManager
     private let proxyService: SystemProxyService
 
+    convenience init() {
+        self.init(
+            parser: ConnectionLinkParser(),
+            store: ConfigurationStore(),
+            runtimeManager: XrayRuntimeManager(),
+            proxyService: SystemProxyService()
+        )
+    }
+
     init(
-        parser: ConnectionLinkParser = ConnectionLinkParser(),
-        store: ConfigurationStore = ConfigurationStore(),
-        runtimeManager: XrayRuntimeManager = XrayRuntimeManager(),
-        proxyService: SystemProxyService = SystemProxyService()
+        parser: ConnectionLinkParser,
+        store: ConfigurationStore,
+        runtimeManager: XrayRuntimeManager,
+        proxyService: SystemProxyService
     ) {
         self.parser = parser
         self.store = store
