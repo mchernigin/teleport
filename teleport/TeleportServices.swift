@@ -726,7 +726,6 @@ final class SystemProxyService: @unchecked Sendable {
 
 @MainActor
 final class AppViewModel: ObservableObject {
-    @Published var draftLink: String = ""
     @Published private(set) var savedConnections: [SavedConnection]
     @Published private(set) var subscriptionSources: [SubscriptionSource]
     @Published private(set) var selectedConnectionID: UUID?
@@ -784,7 +783,6 @@ final class AppViewModel: ObservableObject {
         }
 
         selectedConnectionID = snapshot.selectedConnectionID
-        draftLink = ""
         normalizeSelection()
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
         startAutoRefreshTimer()
@@ -857,17 +855,18 @@ final class AppViewModel: ObservableObject {
         refreshingSubscriptionIDs.contains(sourceID)
     }
 
-    func addConnection() {
-        let trimmed = draftLink.trimmingCharacters(in: .whitespacesAndNewlines)
+    @discardableResult
+    func addConnection(from rawValue: String) -> Bool {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             lastError = "Paste a connection or subscription URL first"
-            return
+            return false
         }
 
         if looksLikeSubscriptionURL(trimmed) {
-            addSubscription(from: trimmed)
+            return addSubscription(from: trimmed)
         } else {
-            addManualConnection(from: trimmed)
+            return addManualConnection(from: trimmed)
         }
     }
 
@@ -972,12 +971,6 @@ final class AppViewModel: ObservableObject {
         lastError = nil
     }
 
-    func pasteFromClipboard() {
-        if let value = NSPasteboard.general.string(forType: .string) {
-            draftLink = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-    }
-
     func connect() {
         guard let selectedConfiguration else {
             connectionPhase = .unconfigured
@@ -1057,25 +1050,26 @@ final class AppViewModel: ObservableObject {
         teardownConnection(resetError: true)
     }
 
-    private func addManualConnection(from rawLink: String) {
+    private func addManualConnection(from rawLink: String) -> Bool {
         do {
             let configuration = try parser.parse(rawLink)
             let savedConnection = SavedConnection(id: UUID(), configuration: configuration, savedAt: Date(), source: nil)
             savedConnections.append(savedConnection)
             selectedConnectionID = savedConnection.id
-            draftLink = ""
             connectionPhase = .stopped
             lastError = nil
             try persist()
+            return true
         } catch {
             lastError = error.localizedDescription
             if savedConnections.isEmpty {
                 connectionPhase = .unconfigured
             }
+            return false
         }
     }
 
-    private func addSubscription(from rawURL: String) {
+    private func addSubscription(from rawURL: String) -> Bool {
         do {
             let url = try validateSubscriptionURL(rawURL)
             let normalizedURL = url.absoluteString
@@ -1093,15 +1087,16 @@ final class AppViewModel: ObservableObject {
             )
 
             subscriptionSources.append(source)
-            draftLink = ""
             lastError = nil
             persistSettingError()
             refreshSubscription(id: source.id, autoSelectFirstImported: savedConnections.isEmpty)
+            return true
         } catch {
             lastError = error.localizedDescription
             if savedConnections.isEmpty {
                 connectionPhase = .unconfigured
             }
+            return false
         }
     }
 
