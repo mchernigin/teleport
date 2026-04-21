@@ -1,5 +1,5 @@
 //
-//  teleportApp.swift
+//  TeleportApp.swift
 //  teleport
 //
 //  Created by Michael Chernigin on 21.04.2026.
@@ -8,28 +8,15 @@
 import SwiftUI
 
 @main
-struct teleportApp: App {
+struct TeleportApp: App {
     @StateObject private var viewModel = AppViewModel()
 
     var body: some Scene {
-        MenuBarExtra("Teleport", systemImage: menuBarIcon) {
+        MenuBarExtra {
             MenuBarView(viewModel: viewModel)
+        } label: {
+            MenuBarIconView(phase: viewModel.connectionPhase, proxyPhase: viewModel.proxyPhase)
         }
         .menuBarExtraStyle(.window)
-    }
-
-    private var menuBarIcon: String {
-        switch viewModel.connectionPhase {
-        case .running:
-            return "bolt.horizontal.circle.fill"
-        case .starting, .stopping:
-            return "arrow.triangle.2.circlepath.circle.fill"
-        case .failed:
-            return "exclamationmark.circle.fill"
-        case .ready, .stopped:
-            return "bolt.horizontal.circle"
-        case .unconfigured:
-            return "bolt.slash.circle"
-        }
     }
 }

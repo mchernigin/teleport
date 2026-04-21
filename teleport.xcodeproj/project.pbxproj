@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		C2DEAC0C2F96D9FB00CCB832 /* teleport.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = teleport.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C2DEAC0C2F96D9FB00CCB832 /* teleport.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = teleport.app; path = Teleport.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -280,7 +280,7 @@
 		};
 		C2DEAC192F96D9FE00CCB832 /* Release */ = {
 			isa = XCBuildConfiguration;
-				buildSettings = {
+			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
