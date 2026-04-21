@@ -10,14 +10,11 @@ The app now expects these bundled resources under the app target directory:
 
 The runtime manager resolves `xray` from the main bundle and sets `XRAY_LOCATION_ASSET` to the bundled `xray-assets` directory before launch.
 
-## Current local source of truth
+## Runtime refresh notes
 
-The current repo copy was sourced from Homebrew Xray 26.3.27:
+The current bundled runtime was copied from a local Homebrew-installed Xray distribution.
 
-- binary: `/opt/homebrew/Cellar/xray/26.3.27/libexec/xray`
-- assets: `/opt/homebrew/Cellar/xray/26.3.27/share/xray/`
-
-If the bundled runtime is refreshed later, replace both the executable and the asset directory together.
+If the bundled runtime is refreshed later, replace both the executable and the asset directory together so the binary and data files stay in sync.
 
 ## Packaging considerations
 
