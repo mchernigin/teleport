@@ -34,10 +34,10 @@ struct MenuBarView: View {
 
     private var configurationSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("VLESS link")
+            Text("Connection link")
                 .font(.subheadline.weight(.semibold))
 
-            TextField("vless://…", text: $viewModel.draftLink)
+            TextField("vless:// or trojan://…", text: $viewModel.draftLink)
                 .textFieldStyle(.roundedBorder)
                 .font(.caption.monospaced())
 
@@ -53,11 +53,15 @@ struct MenuBarView: View {
             }
 
             if let configuration = viewModel.savedConfiguration {
-                Label(configuration.displayName, systemImage: "link")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(configuration.displayName, systemImage: "link")
+                        .font(.caption)
+                    Text("\(configuration.protocolType.displayName) • \(configuration.endpointSummary)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             } else {
-                Text("No saved configuration")
+                Text("No saved connection")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -69,6 +73,8 @@ struct MenuBarView: View {
             Text("Status")
                 .font(.subheadline.weight(.semibold))
             statusRow(title: "Connection", value: viewModel.connectionPhase.rawValue.capitalized)
+            statusRow(title: "Protocol", value: viewModel.savedConfiguration?.protocolType.displayName ?? "—")
+            statusRow(title: "Server", value: viewModel.savedConfiguration?.endpointSummary ?? "—")
             statusRow(title: "Proxy", value: viewModel.proxyPhase.rawValue.capitalized)
             statusRow(title: "HTTP", value: "\(viewModel.proxyEndpoint.host):\(viewModel.proxyEndpoint.httpPort)")
             statusRow(title: "SOCKS", value: "\(viewModel.proxyEndpoint.host):\(viewModel.proxyEndpoint.socksPort)")

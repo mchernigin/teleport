@@ -1,8 +1,5 @@
-# menubar-client Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change menubar-vless-client. Update Purpose after archive.
-## Requirements
 ### Requirement: Menu bar client exposes the primary control surface
 The application SHALL present its primary user interface from the macOS menu bar and SHALL allow the user to view configuration status, runtime status, and proxy status without opening a separate main window.
 
@@ -27,4 +24,3 @@ The application SHALL show distinct operational states for unconfigured, ready, 
 #### Scenario: Runtime launch fails
 - **WHEN** the bundled Xray runtime fails to start or exits unexpectedly
 - **THEN** the system shows a failed state in the menu bar UI
-

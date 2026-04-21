@@ -1,8 +1,5 @@
-# bundled-xray-runtime Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change menubar-vless-client. Update Purpose after archive.
-## Requirements
 ### Requirement: Application bundles an Xray runtime
 The application SHALL include a compatible Xray core runtime as part of the app distribution so the user does not need to install Xray separately.
 
@@ -35,4 +32,3 @@ The system SHALL allow the user to start and stop the bundled Xray runtime and S
 #### Scenario: Stop runtime successfully
 - **WHEN** the user stops the connection while the Xray process is running
 - **THEN** the system terminates the Xray process and reports it as stopped
-

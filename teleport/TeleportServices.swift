@@ -3,38 +3,38 @@ import Combine
 import Foundation
 import SystemConfiguration
 
-struct VLESSParser {
-    func parse(_ rawLink: String) throws -> VLESSConfiguration {
+struct ConnectionLinkParser {
+    func parse(_ rawLink: String) throws -> ConnectionConfiguration {
         let trimmed = rawLink.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let components = URLComponents(string: trimmed) else {
+        guard let components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased() else {
             throw ConfigurationError.invalidScheme
         }
 
-        guard components.scheme?.lowercased() == "vless" else {
+        switch scheme {
+        case ConnectionProtocolType.vless.rawValue:
+            return try parseVLESS(trimmed, components: components)
+        case ConnectionProtocolType.trojan.rawValue:
+            return try parseTrojan(trimmed, components: components)
+        default:
             throw ConfigurationError.invalidScheme
         }
+    }
 
-        guard let host = components.host, !host.isEmpty else {
-            throw ConfigurationError.missingHost
-        }
-
-        guard let port = components.port else {
-            throw ConfigurationError.invalidPort
-        }
+    private func parseVLESS(_ rawLink: String, components: URLComponents) throws -> ConnectionConfiguration {
+        let base = try parseBase(rawLink, components: components)
 
         guard let user = components.user, !user.isEmpty else {
             throw ConfigurationError.missingUser
         }
 
-        guard let uuid = UUID(uuidString: user) else {
+        guard UUID(uuidString: user) != nil else {
             throw ConfigurationError.invalidUUID
         }
 
-        let queryItems = components.queryItems ?? []
-        let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-
-        let securityRaw = (query["security"] ?? "tls").lowercased()
-        guard let security = VLESSConfiguration.Security(rawValue: securityRaw) else {
+        let query = try queryDictionary(from: components)
+        let securityRaw = (query["security"] ?? ConnectionSecurity.tls.rawValue).lowercased()
+        guard let security = ConnectionSecurity(rawValue: securityRaw) else {
             throw ConfigurationError.unsupportedSecurity(securityRaw)
         }
 
@@ -50,49 +50,124 @@ struct VLESSParser {
             }
         }
 
-        let transportRaw = (query["type"] ?? "tcp").lowercased()
-        guard let transport = VLESSConfiguration.Transport(rawValue: transportRaw) else {
-            throw ConfigurationError.unsupportedTransport(transportRaw)
-        }
-
+        let transport = try parseTransport(query: query)
         let flow = query["flow"]?.lowercased()
         if let flow, !flow.isEmpty {
-            guard flow == "xtls-rprx-vision" else {
-                throw ConfigurationError.unsupportedFlow(flow)
-            }
-
-            guard security == .reality, transport == .tcp else {
+            guard flow == "xtls-rprx-vision", security == .reality, transport == .tcp else {
                 throw ConfigurationError.unsupportedFlow(flow)
             }
         }
 
-        let path = query["path"]
-        let serverName = query["sni"]
-        let alpn = query["alpn"]?.split(separator: ",").map { String($0) } ?? []
-        let fingerprint = query["fp"]
-        let publicKey = query["pbk"]
-        let shortID = query["sid"]
-        let spiderX = query["spx"]
-        let remarks = components.fragment?.removingPercentEncoding
-
-        return VLESSConfiguration(
-            rawLink: trimmed,
-            id: uuid,
-            userID: user,
-            host: host,
-            port: port,
-            remarks: remarks,
+        return ConnectionConfiguration(
+            rawLink: rawLink,
+            protocolType: .vless,
+            host: base.host,
+            port: base.port,
+            remarks: base.remarks,
             security: security,
             transport: transport,
-            flow: flow,
-            path: path,
-            serverName: serverName,
-            alpn: alpn,
-            fingerprint: fingerprint,
-            publicKey: publicKey,
-            shortID: shortID,
-            spiderX: spiderX
+            path: query["path"],
+            hostHeader: query["host"],
+            serverName: query["sni"],
+            alpn: parseALPN(query: query),
+            fingerprint: query["fp"],
+            publicKey: query["pbk"],
+            shortID: query["sid"],
+            spiderX: query["spx"],
+            vlessUserID: user,
+            vlessFlow: flow,
+            trojanPassword: nil
         )
+    }
+
+    private func parseTrojan(_ rawLink: String, components: URLComponents) throws -> ConnectionConfiguration {
+        let base = try parseBase(rawLink, components: components)
+        let query = try queryDictionary(from: components)
+
+        guard let password = components.user?.removingPercentEncoding, !password.isEmpty else {
+            throw ConfigurationError.missingPassword
+        }
+
+        let securityRaw = (query["security"] ?? ConnectionSecurity.tls.rawValue).lowercased()
+        guard let security = ConnectionSecurity(rawValue: securityRaw) else {
+            throw ConfigurationError.unsupportedSecurity(securityRaw)
+        }
+
+        let transport = try parseTransport(query: query)
+
+        switch security {
+        case .tls:
+            guard transport == .tcp || transport == .ws else {
+                throw ConfigurationError.unsupportedTransport(transport.rawValue)
+            }
+        case .reality:
+            guard transport == .tcp else {
+                throw ConfigurationError.unsupportedTransport(transport.rawValue)
+            }
+            guard !(query["pbk"] ?? "").isEmpty else {
+                throw ConfigurationError.missingParameter("pbk")
+            }
+            guard !(query["sni"] ?? "").isEmpty else {
+                throw ConfigurationError.missingParameter("sni")
+            }
+        case .none:
+            throw ConfigurationError.unsupportedSecurity(securityRaw)
+        }
+
+        return ConnectionConfiguration(
+            rawLink: rawLink,
+            protocolType: .trojan,
+            host: base.host,
+            port: base.port,
+            remarks: base.remarks,
+            security: security,
+            transport: transport,
+            path: query["path"],
+            hostHeader: query["host"],
+            serverName: query["sni"] ?? base.host,
+            alpn: parseALPN(query: query),
+            fingerprint: query["fp"],
+            publicKey: query["pbk"],
+            shortID: query["sid"],
+            spiderX: query["spx"],
+            vlessUserID: nil,
+            vlessFlow: nil,
+            trojanPassword: password
+        )
+    }
+
+    private func parseBase(_ rawLink: String, components: URLComponents) throws -> (host: String, port: Int, remarks: String?) {
+        guard let host = components.host, !host.isEmpty else {
+            throw ConfigurationError.missingHost
+        }
+
+        guard let port = components.port else {
+            throw ConfigurationError.invalidPort
+        }
+
+        let remarks = components.fragment?.removingPercentEncoding
+        _ = rawLink
+        return (host, port, remarks)
+    }
+
+    private func queryDictionary(from components: URLComponents) throws -> [String: String] {
+        guard let queryItems = components.queryItems else {
+            return [:]
+        }
+
+        return Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+    }
+
+    private func parseTransport(query: [String: String]) throws -> ConnectionTransport {
+        let transportRaw = (query["type"] ?? ConnectionTransport.tcp.rawValue).lowercased()
+        guard let transport = ConnectionTransport(rawValue: transportRaw) else {
+            throw ConfigurationError.unsupportedTransport(transportRaw)
+        }
+        return transport
+    }
+
+    private func parseALPN(query: [String: String]) -> [String] {
+        query["alpn"]?.split(separator: ",").map { String($0) } ?? []
     }
 }
 
@@ -114,11 +189,15 @@ final class ConfigurationStore {
             return AppSnapshot(persistedConfiguration: nil, proxyEndpoint: .default)
         }
 
-        guard let snapshot = try? decoder.decode(AppSnapshot.self, from: data) else {
-            return AppSnapshot(persistedConfiguration: nil, proxyEndpoint: .default)
+        if let snapshot = try? decoder.decode(AppSnapshot.self, from: data) {
+            return snapshot
         }
 
-        return snapshot
+        if let legacySnapshot = try? decoder.decode(LegacyAppSnapshot.self, from: data) {
+            return legacySnapshot.asAppSnapshot
+        }
+
+        return AppSnapshot(persistedConfiguration: nil, proxyEndpoint: .default)
     }
 
     func save(_ snapshot: AppSnapshot) throws {
@@ -130,7 +209,7 @@ final class ConfigurationStore {
 struct XrayConfigurationWriter {
     let proxyEndpoint: ProxyEndpoint
 
-    func writeConfig(for configuration: VLESSConfiguration) throws -> URL {
+    func writeConfig(for configuration: ConnectionConfiguration) throws -> URL {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("teleport", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -142,51 +221,8 @@ struct XrayConfigurationWriter {
         return output
     }
 
-    private func makePayload(configuration: VLESSConfiguration) -> [String: Any] {
-        var user: [String: Any] = [
-            "id": configuration.userID,
-            "encryption": "none"
-        ]
-
-        if let flow = configuration.flow, !flow.isEmpty {
-            user["flow"] = flow
-        }
-
-        let outboundSettings: [String: Any] = [
-            "vnext": [[
-                "address": configuration.host,
-                "port": configuration.port,
-                "users": [user]
-            ]]
-        ]
-
-        var streamSettings: [String: Any] = [
-            "network": configuration.transport.rawValue,
-            "security": configuration.security.rawValue
-        ]
-
-        if configuration.transport == .ws {
-            streamSettings["wsSettings"] = [
-                "path": configuration.path ?? "/"
-            ]
-        }
-
-        if configuration.security == .tls {
-            streamSettings["tlsSettings"] = [
-                "serverName": configuration.serverName ?? configuration.host,
-                "alpn": configuration.alpn
-            ]
-        }
-
-        if configuration.security == .reality {
-            streamSettings["realitySettings"] = [
-                "serverName": configuration.serverName ?? configuration.host,
-                "fingerprint": configuration.fingerprint ?? "chrome",
-                "publicKey": configuration.publicKey ?? "",
-                "shortId": configuration.shortID ?? "",
-                "spiderX": configuration.spiderX ?? ""
-            ]
-        }
+    private func makePayload(configuration: ConnectionConfiguration) -> [String: Any] {
+        let streamSettings = makeStreamSettings(configuration: configuration)
 
         return [
             "log": [
@@ -211,8 +247,8 @@ struct XrayConfigurationWriter {
             "outbounds": [
                 [
                     "tag": "proxy",
-                    "protocol": "vless",
-                    "settings": outboundSettings,
+                    "protocol": configuration.protocolType.rawValue,
+                    "settings": makeOutboundSettings(configuration: configuration),
                     "streamSettings": streamSettings
                 ],
                 [
@@ -232,6 +268,80 @@ struct XrayConfigurationWriter {
                 ]
             ]
         ]
+    }
+
+    private func makeOutboundSettings(configuration: ConnectionConfiguration) -> [String: Any] {
+        switch configuration.protocolType {
+        case .vless:
+            var user: [String: Any] = [
+                "id": configuration.vlessUserID ?? "",
+                "encryption": "none"
+            ]
+
+            if let flow = configuration.vlessFlow, !flow.isEmpty {
+                user["flow"] = flow
+            }
+
+            return [
+                "vnext": [[
+                    "address": configuration.host,
+                    "port": configuration.port,
+                    "users": [user]
+                ]]
+            ]
+
+        case .trojan:
+            return [
+                "servers": [[
+                    "address": configuration.host,
+                    "port": configuration.port,
+                    "password": configuration.trojanPassword ?? ""
+                ]]
+            ]
+        }
+    }
+
+    private func makeStreamSettings(configuration: ConnectionConfiguration) -> [String: Any] {
+        var streamSettings: [String: Any] = [
+            "network": configuration.transport.rawValue,
+            "security": configuration.security.rawValue
+        ]
+
+        if configuration.transport == .ws {
+            var wsSettings: [String: Any] = [
+                "path": configuration.path ?? "/"
+            ]
+
+            if let hostHeader = configuration.hostHeader, !hostHeader.isEmpty {
+                wsSettings["headers"] = ["Host": hostHeader]
+            }
+
+            streamSettings["wsSettings"] = wsSettings
+        }
+
+        if configuration.security == .tls {
+            var tlsSettings: [String: Any] = [
+                "serverName": configuration.serverName ?? configuration.host
+            ]
+
+            if !configuration.alpn.isEmpty {
+                tlsSettings["alpn"] = configuration.alpn
+            }
+
+            streamSettings["tlsSettings"] = tlsSettings
+        }
+
+        if configuration.security == .reality {
+            streamSettings["realitySettings"] = [
+                "serverName": configuration.serverName ?? configuration.host,
+                "fingerprint": configuration.fingerprint ?? "chrome",
+                "publicKey": configuration.publicKey ?? "",
+                "shortId": configuration.shortID ?? "",
+                "spiderX": configuration.spiderX ?? ""
+            ]
+        }
+
+        return streamSettings
     }
 }
 
@@ -404,19 +514,19 @@ final class SystemProxyService {
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var draftLink: String = ""
-    @Published private(set) var savedConfiguration: VLESSConfiguration?
+    @Published private(set) var savedConfiguration: ConnectionConfiguration?
     @Published private(set) var connectionPhase: ConnectionPhase = .unconfigured
     @Published private(set) var proxyPhase: ProxyPhase = .disabled
     @Published private(set) var lastError: String?
     @Published private(set) var proxyEndpoint: ProxyEndpoint
 
-    private let parser: VLESSParser
+    private let parser: ConnectionLinkParser
     private let store: ConfigurationStore
     private let runtimeManager: XrayRuntimeManager
     private let proxyService: SystemProxyService
 
     init(
-        parser: VLESSParser = VLESSParser(),
+        parser: ConnectionLinkParser = ConnectionLinkParser(),
         store: ConfigurationStore = ConfigurationStore(),
         runtimeManager: XrayRuntimeManager = XrayRuntimeManager(),
         proxyService: SystemProxyService = SystemProxyService()
@@ -456,7 +566,7 @@ final class AppViewModel: ObservableObject {
     var statusSummary: String {
         switch connectionPhase {
         case .unconfigured:
-            return "Add a VLESS link to get started"
+            return "Add a connection link to get started"
         case .ready, .stopped:
             return "Ready to start Xray"
         case .starting:
@@ -496,7 +606,7 @@ final class AppViewModel: ObservableObject {
     func startConnection() {
         guard let savedConfiguration else {
             connectionPhase = .unconfigured
-            lastError = "Save a VLESS link first"
+            lastError = "Save a connection link first"
             return
         }
 
