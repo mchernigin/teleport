@@ -72,7 +72,7 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Status")
                 .font(.subheadline.weight(.semibold))
-            statusRow(title: "Connection", value: viewModel.connectionPhase.rawValue.capitalized)
+            statusRow(title: "Connection", value: viewModel.isConnected ? "Connected" : viewModel.connectionPhase.rawValue.capitalized)
             statusRow(title: "Protocol", value: viewModel.savedConfiguration?.protocolType.displayName ?? "—")
             statusRow(title: "Server", value: viewModel.savedConfiguration?.endpointSummary ?? "—")
             statusRow(title: "Proxy", value: viewModel.proxyPhase.rawValue.capitalized)
@@ -97,29 +97,20 @@ struct MenuBarView: View {
                 .font(.subheadline.weight(.semibold))
 
             HStack {
-                Button(viewModel.canStop ? "Stop Xray" : "Start Xray") {
-                    if viewModel.canStop {
-                        viewModel.stopConnection()
+                Button(viewModel.isConnected ? "Disconnect" : "Connect") {
+                    if viewModel.isConnected || viewModel.canDisconnect {
+                        viewModel.disconnect()
                     } else {
-                        viewModel.startConnection()
+                        viewModel.connect()
                     }
                 }
-                .disabled(!viewModel.canStart && !viewModel.canStop)
+                .disabled(!viewModel.canConnect && !viewModel.canDisconnect)
 
-                Button(viewModel.proxyPhase == .enabled ? "Disable proxy" : "Enable proxy") {
-                    if viewModel.proxyPhase == .enabled {
-                        viewModel.disableProxy()
-                    } else {
-                        viewModel.enableProxy()
-                    }
+                Spacer()
+
+                Button("Quit") {
+                    NSApplication.shared.terminate(nil)
                 }
-                .disabled((viewModel.proxyPhase == .enabled) ? false : !viewModel.canEnableProxy)
-            }
-
-            Divider()
-
-            Button("Quit") {
-                NSApplication.shared.terminate(nil)
             }
         }
     }

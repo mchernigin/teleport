@@ -524,6 +524,7 @@ final class AppViewModel: ObservableObject {
     private let store: ConfigurationStore
     private let runtimeManager: XrayRuntimeManager
     private let proxyService: SystemProxyService
+    private let operationQueue = DispatchQueue(label: "dev.x.teleport.connection-operations", qos: .userInitiated)
 
     convenience init() {
         self.init(
@@ -560,16 +561,16 @@ final class AppViewModel: ObservableObject {
         self.connectionPhase = savedConfiguration == nil ? .unconfigured : .stopped
     }
 
-    var canStart: Bool {
-        savedConfiguration != nil && connectionPhase != .running && connectionPhase != .starting
+    var canConnect: Bool {
+        savedConfiguration != nil && connectionPhase != .starting && connectionPhase != .running && proxyPhase != .enabling && proxyPhase != .enabled
     }
 
-    var canStop: Bool {
-        connectionPhase == .running || connectionPhase == .starting || connectionPhase == .failed
+    var canDisconnect: Bool {
+        connectionPhase == .running || connectionPhase == .starting || proxyPhase == .enabled || proxyPhase == .enabling || connectionPhase == .failed
     }
 
-    var canEnableProxy: Bool {
-        connectionPhase == .running && proxyPhase != .enabled && proxyPhase != .enabling
+    var isConnected: Bool {
+        connectionPhase == .running && proxyPhase == .enabled
     }
 
     var statusSummary: String {
@@ -577,15 +578,15 @@ final class AppViewModel: ObservableObject {
         case .unconfigured:
             return "Add a connection link to get started"
         case .ready, .stopped:
-            return "Ready to start Xray"
+            return proxyPhase == .enabled ? "Connected" : "Disconnected"
         case .starting:
-            return "Starting Xray…"
+            return proxyPhase == .enabling ? "Connecting…" : "Starting connection…"
         case .running:
-            return "Xray is running"
+            return proxyPhase == .enabled ? "Connected" : "Xray is ready"
         case .stopping:
-            return "Stopping Xray…"
+            return "Disconnecting…"
         case .failed:
-            return lastError ?? "Xray failed"
+            return lastError ?? "Connection failed"
         }
     }
 
@@ -612,59 +613,118 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func startConnection() {
+    func connect() {
         guard let savedConfiguration else {
             connectionPhase = .unconfigured
             lastError = "Save a connection link first"
             return
         }
 
+        let proxyEndpoint = proxyEndpoint
+        let runtimeManager = runtimeManager
+        let proxyService = proxyService
+
         connectionPhase = .starting
+        proxyPhase = .enabling
         lastError = nil
 
-        do {
-            let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: savedConfiguration)
-            try runtimeManager.start(configURL: configURL)
-            connectionPhase = .running
-        } catch {
-            connectionPhase = .failed
-            lastError = error.localizedDescription
+        operationQueue.async { [weak self] in
+            do {
+                let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: savedConfiguration)
+                try runtimeManager.start(configURL: configURL)
+                try proxyService.enableProxy(endpoint: proxyEndpoint)
+
+                Task { @MainActor [weak self] in
+                    self?.connectionPhase = .running
+                    self?.proxyPhase = .enabled
+                    self?.lastError = nil
+                }
+            } catch {
+                runtimeManager.stop()
+
+                Task { @MainActor [weak self] in
+                    self?.connectionPhase = .failed
+                    self?.proxyPhase = .failed
+                    self?.lastError = error.localizedDescription
+                }
+            }
         }
     }
 
-    func stopConnection() {
+    func disconnect() {
+        let shouldDisableProxy = proxyPhase == .enabled || proxyPhase == .enabling || proxyPhase == .failed || proxyPhase == .disabling
+        let hasSavedConfiguration = savedConfiguration != nil
+        let runtimeManager = runtimeManager
+        let proxyService = proxyService
+
         connectionPhase = .stopping
-        runtimeManager.stop()
-        connectionPhase = savedConfiguration == nil ? .unconfigured : .stopped
-    }
-
-    func enableProxy() {
-        guard connectionPhase == .running else {
-            proxyPhase = .failed
-            lastError = "Proxy cannot be enabled until Xray is running"
-            return
-        }
-
-        proxyPhase = .enabling
-        do {
-            try proxyService.enableProxy(endpoint: proxyEndpoint)
-            proxyPhase = .enabled
-            lastError = nil
-        } catch {
-            proxyPhase = .failed
-            lastError = error.localizedDescription
-        }
-    }
-
-    func disableProxy() {
         proxyPhase = .disabling
-        do {
-            try proxyService.disableProxy()
-            proxyPhase = .disabled
-            lastError = nil
-        } catch {
-            proxyPhase = .failed
-            lastError = error.localizedDescription
+
+        operationQueue.async { [weak self] in
+            if shouldDisableProxy {
+                do {
+                    try proxyService.disableProxy()
+                    Task { @MainActor [weak self] in
+                        self?.proxyPhase = .disabled
+                        self?.lastError = nil
+                    }
+                } catch {
+                    Task { @MainActor [weak self] in
+                        self?.proxyPhase = .failed
+                        self?.lastError = error.localizedDescription
+                    }
+                }
+            }
+
+            runtimeManager.stop()
+
+            Task { @MainActor [weak self] in
+                self?.connectionPhase = hasSavedConfiguration ? .stopped : .unconfigured
+                if !shouldDisableProxy {
+                    self?.proxyPhase = .disabled
+                    self?.lastError = nil
+                }
+            }
+        }
+    }
+
+    func handleAppTermination() {
+        teardownConnection(resetError: true)
+    }
+
+    private func teardownConnection(resetError: Bool) {
+        let shouldDisableProxy = proxyPhase == .enabled || proxyPhase == .enabling || proxyPhase == .failed || proxyPhase == .disabling
+
+        if shouldDisableProxy {
+            do {
+                try proxyService.disableProxy()
+                Task { @MainActor [weak self] in
+                    self?.proxyPhase = .disabled
+                    if resetError {
+                        self?.lastError = nil
+                    }
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.proxyPhase = .failed
+                    if !resetError {
+                        self?.lastError = error.localizedDescription
+                    }
+                }
+            }
+        }
+
+        runtimeManager.stop()
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.connectionPhase = self.savedConfiguration == nil ? .unconfigured : .stopped
+            if !shouldDisableProxy {
+                self.proxyPhase = .disabled
+                if resetError {
+                    self.lastError = nil
+                }
+            }
         }
     }
 
