@@ -78,13 +78,15 @@ struct ConnectionConfiguration: Codable, Equatable {
     }
 }
 
-struct PersistedConfiguration: Codable, Equatable {
+struct SavedConnection: Codable, Equatable, Identifiable {
+    let id: UUID
     let configuration: ConnectionConfiguration
     let savedAt: Date
 }
 
 struct AppSnapshot: Codable, Equatable {
-    var persistedConfiguration: PersistedConfiguration?
+    var savedConnections: [SavedConnection]
+    var selectedConnectionID: UUID?
     var proxyEndpoint: ProxyEndpoint
 }
 
@@ -185,10 +187,19 @@ extension LegacyVLESSConfiguration {
 
 extension LegacyAppSnapshot {
     var asAppSnapshot: AppSnapshot {
-        AppSnapshot(
-            persistedConfiguration: persistedConfiguration.map {
-                PersistedConfiguration(configuration: $0.configuration.asConnectionConfiguration, savedAt: $0.savedAt)
-            },
+        let savedConnections = persistedConfiguration.map {
+            [
+                SavedConnection(
+                    id: $0.configuration.id,
+                    configuration: $0.configuration.asConnectionConfiguration,
+                    savedAt: $0.savedAt
+                )
+            ]
+        } ?? []
+
+        return AppSnapshot(
+            savedConnections: savedConnections,
+            selectedConnectionID: savedConnections.first?.id,
             proxyEndpoint: proxyEndpoint
         )
     }

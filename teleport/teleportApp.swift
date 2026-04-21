@@ -37,5 +37,10 @@ struct TeleportApp: App {
             MenuBarIconView(phase: viewModel.connectionPhase, proxyPhase: viewModel.proxyPhase)
         }
         .menuBarExtraStyle(.window)
+
+        Window("Settings", id: "settings") {
+            SettingsView(viewModel: viewModel)
+        }
+        .windowResizability(.contentSize)
     }
 }

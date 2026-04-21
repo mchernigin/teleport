@@ -1,13 +1,13 @@
 import SwiftUI
 
 struct MenuBarView: View {
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             configurationSection
-            statusSection
             actionSection
 
             if let error = viewModel.lastError {
@@ -23,72 +23,89 @@ struct MenuBarView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top) {
             Text("Teleport")
                 .font(.headline)
-            Text(viewModel.statusSummary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Text(headerStatusText)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(headerStatusColor)
+        }
+    }
+
+    private var headerStatusText: String {
+        if viewModel.isConnected {
+            return "Connected"
+        }
+
+        switch viewModel.connectionPhase {
+        case .starting:
+            return "Connecting"
+        case .stopping:
+            return "Disconnecting"
+        case .failed:
+            return "Error"
+        case .unconfigured:
+            return "No config"
+        case .ready, .stopped, .running:
+            return "Disconnected"
+        }
+    }
+
+    private var headerStatusColor: Color {
+        switch viewModel.connectionPhase {
+        case .failed:
+            return .red
+        case .starting, .stopping:
+            return .orange
+        case .running where viewModel.proxyPhase == .enabled:
+            return Color(NSColor.systemGreen.withAlphaComponent(0.72))
+        case .unconfigured:
+            return .secondary
+        default:
+            return .secondary
         }
     }
 
     private var configurationSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Connection link")
+            Text("Connection")
                 .font(.subheadline.weight(.semibold))
 
-            TextField("vless:// or trojan://…", text: $viewModel.draftLink)
-                .textFieldStyle(.roundedBorder)
-                .font(.caption.monospaced())
-
-            HStack {
-                Button("Paste") {
-                    viewModel.pasteFromClipboard()
-                }
-
-                Button("Save link") {
-                    viewModel.saveLink()
-                }
-                .keyboardShortcut(.return)
-            }
-
-            if let configuration = viewModel.savedConfiguration {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(configuration.displayName, systemImage: "link")
-                        .font(.caption)
-                    Text("\(configuration.protocolType.displayName) • \(configuration.endpointSummary)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                Text("No saved connection")
+            if viewModel.savedConnections.isEmpty {
+                Text("No saved connections")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Button("Open Settings") {
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    openWindow(id: "settings")
+                }
+            } else {
+                Picker("Selected connection", selection: selectedConnectionBinding) {
+                    ForEach(viewModel.savedConnections) { connection in
+                        Text(connection.configuration.displayName)
+                            .tag(Optional(connection.id))
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .disabled(!viewModel.canChangeSelection)
             }
         }
     }
 
-    private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Status")
-                .font(.subheadline.weight(.semibold))
-            statusRow(title: "Connection", value: viewModel.isConnected ? "Connected" : viewModel.connectionPhase.rawValue.capitalized)
-            statusRow(title: "Protocol", value: viewModel.savedConfiguration?.protocolType.displayName ?? "—")
-            statusRow(title: "Server", value: viewModel.savedConfiguration?.endpointSummary ?? "—")
-            statusRow(title: "Proxy", value: viewModel.proxyPhase.rawValue.capitalized)
-            statusRow(title: "HTTP", value: "\(viewModel.proxyEndpoint.host):\(viewModel.proxyEndpoint.httpPort)")
-            statusRow(title: "SOCKS", value: "\(viewModel.proxyEndpoint.host):\(viewModel.proxyEndpoint.socksPort)")
-        }
-    }
-
-    private func statusRow(title: String, value: String) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value)
-                .foregroundStyle(.secondary)
-        }
-        .font(.caption)
+    private var selectedConnectionBinding: Binding<UUID?> {
+        Binding(
+            get: { viewModel.selectedConnectionID },
+            set: { newValue in
+                if let newValue {
+                    viewModel.selectConnection(id: newValue)
+                }
+            }
+        )
     }
 
     private var actionSection: some View {
@@ -105,6 +122,11 @@ struct MenuBarView: View {
                     }
                 }
                 .disabled(!viewModel.canConnect && !viewModel.canDisconnect)
+
+                Button("Settings") {
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    openWindow(id: "settings")
+                }
 
                 Spacer()
 

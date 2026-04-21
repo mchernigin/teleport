@@ -1,8 +1,5 @@
-# vless-link-management Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change menubar-vless-client. Update Purpose after archive.
-## Requirements
 ### Requirement: User can add a VLESS link
 The system SHALL allow the user to input a VLESS share link and save it as a saved connection configuration that can coexist with other saved connections. The user SHALL be able to select that saved VLESS configuration for later connection.
 
@@ -27,4 +24,3 @@ The system SHALL persist saved VLESS links across application restarts and SHALL
 #### Scenario: Relaunch app with saved configuration
 - **WHEN** the application restarts after a VLESS link has been saved
 - **THEN** the system restores the saved VLESS configuration list and the previously selected VLESS configuration when applicable
-

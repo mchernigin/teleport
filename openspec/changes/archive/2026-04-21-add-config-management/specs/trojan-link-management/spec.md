@@ -1,8 +1,5 @@
-# trojan-link-management Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-trojan-support. Update Purpose after archive.
-## Requirements
 ### Requirement: User can add a Trojan link
 The system SHALL allow the user to input a supported Trojan share link and save it as a saved connection configuration that can coexist with other saved connections. The user SHALL be able to select that saved Trojan configuration for later connection.
 
@@ -35,4 +32,3 @@ The system SHALL persist saved Trojan links across application restarts and SHAL
 #### Scenario: Relaunch app with saved Trojan configuration
 - **WHEN** the application restarts after a Trojan link has been saved
 - **THEN** the system restores the saved Trojan configuration list and the previously selected Trojan configuration when applicable
-

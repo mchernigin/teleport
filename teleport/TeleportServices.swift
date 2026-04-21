@@ -186,7 +186,7 @@ final class ConfigurationStore {
 
     func load() -> AppSnapshot {
         guard let data = try? Data(contentsOf: fileURL) else {
-            return AppSnapshot(persistedConfiguration: nil, proxyEndpoint: .default)
+            return AppSnapshot(savedConnections: [], selectedConnectionID: nil, proxyEndpoint: .default)
         }
 
         if let snapshot = try? decoder.decode(AppSnapshot.self, from: data) {
@@ -194,10 +194,12 @@ final class ConfigurationStore {
         }
 
         if let legacySnapshot = try? decoder.decode(LegacyAppSnapshot.self, from: data) {
-            return legacySnapshot.asAppSnapshot
+            let migratedSnapshot = legacySnapshot.asAppSnapshot
+            try? save(migratedSnapshot)
+            return migratedSnapshot
         }
 
-        return AppSnapshot(persistedConfiguration: nil, proxyEndpoint: .default)
+        return AppSnapshot(savedConnections: [], selectedConnectionID: nil, proxyEndpoint: .default)
     }
 
     func save(_ snapshot: AppSnapshot) throws {
@@ -514,7 +516,8 @@ final class SystemProxyService {
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var draftLink: String = ""
-    @Published private(set) var savedConfiguration: ConnectionConfiguration?
+    @Published private(set) var savedConnections: [SavedConnection]
+    @Published private(set) var selectedConnectionID: UUID?
     @Published private(set) var connectionPhase: ConnectionPhase = .unconfigured
     @Published private(set) var proxyPhase: ProxyPhase = .disabled
     @Published private(set) var lastError: String?
@@ -549,24 +552,38 @@ final class AppViewModel: ObservableObject {
         let snapshot = store.load()
         self.proxyEndpoint = snapshot.proxyEndpoint
 
-        if let rawLink = snapshot.persistedConfiguration?.configuration.rawLink,
-           let reparsedConfiguration = try? parser.parse(rawLink) {
-            self.savedConfiguration = reparsedConfiguration
-            self.draftLink = rawLink
-        } else {
-            self.savedConfiguration = snapshot.persistedConfiguration?.configuration
-            self.draftLink = snapshot.persistedConfiguration?.configuration.rawLink ?? ""
+        let normalizedConnections = snapshot.savedConnections.map { savedConnection in
+            if let reparsedConfiguration = try? parser.parse(savedConnection.configuration.rawLink) {
+                return SavedConnection(id: savedConnection.id, configuration: reparsedConfiguration, savedAt: savedConnection.savedAt)
+            }
+            return savedConnection
         }
 
-        self.connectionPhase = savedConfiguration == nil ? .unconfigured : .stopped
+        self.savedConnections = normalizedConnections
+        self.selectedConnectionID = snapshot.selectedConnectionID ?? normalizedConnections.first?.id
+        self.draftLink = ""
+        self.connectionPhase = normalizedConnections.isEmpty ? .unconfigured : .stopped
+    }
+
+    var selectedConnection: SavedConnection? {
+        guard let selectedConnectionID else { return savedConnections.first }
+        return savedConnections.first { $0.id == selectedConnectionID } ?? savedConnections.first
+    }
+
+    var selectedConfiguration: ConnectionConfiguration? {
+        selectedConnection?.configuration
     }
 
     var canConnect: Bool {
-        savedConfiguration != nil && connectionPhase != .starting && connectionPhase != .running && proxyPhase != .enabling && proxyPhase != .enabled
+        selectedConfiguration != nil && connectionPhase != .starting && connectionPhase != .running && proxyPhase != .enabling && proxyPhase != .enabled
     }
 
     var canDisconnect: Bool {
         connectionPhase == .running || connectionPhase == .starting || proxyPhase == .enabled || proxyPhase == .enabling || connectionPhase == .failed
+    }
+
+    var canChangeSelection: Bool {
+        !(connectionPhase == .running || connectionPhase == .starting || connectionPhase == .stopping || proxyPhase == .enabled || proxyPhase == .enabling || proxyPhase == .disabling)
     }
 
     var isConnected: Bool {
@@ -576,7 +593,7 @@ final class AppViewModel: ObservableObject {
     var statusSummary: String {
         switch connectionPhase {
         case .unconfigured:
-            return "Add a connection link to get started"
+            return savedConnections.isEmpty ? "Add a connection in Settings to get started" : "Select a connection to get started"
         case .ready, .stopped:
             return proxyPhase == .enabled ? "Connected" : "Disconnected"
         case .starting:
@@ -590,17 +607,58 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func saveLink() {
+    func addConnection() {
         do {
             let configuration = try parser.parse(draftLink)
-            savedConfiguration = configuration
+            let savedConnection = SavedConnection(id: UUID(), configuration: configuration, savedAt: Date())
+            savedConnections.append(savedConnection)
+            selectedConnectionID = savedConnection.id
+            draftLink = ""
             connectionPhase = .stopped
             lastError = nil
             try persist()
         } catch {
             lastError = error.localizedDescription
+            if savedConnections.isEmpty {
+                connectionPhase = .unconfigured
+            }
+        }
+    }
+
+    func removeConnection(id: UUID) {
+        guard let index = savedConnections.firstIndex(where: { $0.id == id }) else { return }
+
+        if !canChangeSelection && selectedConnectionID == id {
+            lastError = "Disconnect before removing the active connection"
+            return
+        }
+
+        savedConnections.remove(at: index)
+
+        if selectedConnectionID == id {
+            selectedConnectionID = savedConnections.indices.contains(index) ? savedConnections[index].id : savedConnections.last?.id
+        }
+
+        if savedConnections.isEmpty {
+            selectedConnectionID = nil
             connectionPhase = .unconfigured
         }
+
+        persistSettingError()
+    }
+
+    func selectConnection(id: UUID) {
+        if !canChangeSelection, selectedConnectionID != id {
+            lastError = "Disconnect before switching connections"
+            return
+        }
+
+        selectedConnectionID = id
+        if selectedConfiguration != nil, connectionPhase == .unconfigured {
+            connectionPhase = .stopped
+        }
+        lastError = nil
+        persistSettingError()
     }
 
     func clearError() {
@@ -614,9 +672,9 @@ final class AppViewModel: ObservableObject {
     }
 
     func connect() {
-        guard let savedConfiguration else {
+        guard let selectedConfiguration else {
             connectionPhase = .unconfigured
-            lastError = "Save a connection link first"
+            lastError = "Add and select a connection first"
             return
         }
 
@@ -630,7 +688,7 @@ final class AppViewModel: ObservableObject {
 
         operationQueue.async { [weak self] in
             do {
-                let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: savedConfiguration)
+                let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: selectedConfiguration)
                 try runtimeManager.start(configURL: configURL)
                 try proxyService.enableProxy(endpoint: proxyEndpoint)
 
@@ -653,7 +711,7 @@ final class AppViewModel: ObservableObject {
 
     func disconnect() {
         let shouldDisableProxy = proxyPhase == .enabled || proxyPhase == .enabling || proxyPhase == .failed || proxyPhase == .disabling
-        let hasSavedConfiguration = savedConfiguration != nil
+        let hasSavedConfiguration = selectedConfiguration != nil
         let runtimeManager = runtimeManager
         let proxyService = proxyService
 
@@ -718,7 +776,7 @@ final class AppViewModel: ObservableObject {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.connectionPhase = self.savedConfiguration == nil ? .unconfigured : .stopped
+            self.connectionPhase = self.selectedConfiguration == nil ? .unconfigured : .stopped
             if !shouldDisableProxy {
                 self.proxyPhase = .disabled
                 if resetError {
@@ -728,9 +786,18 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    private func persistSettingError() {
+        do {
+            try persist()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     private func persist() throws {
         let snapshot = AppSnapshot(
-            persistedConfiguration: savedConfiguration.map { PersistedConfiguration(configuration: $0, savedAt: Date()) },
+            savedConnections: savedConnections,
+            selectedConnectionID: selectedConnectionID ?? savedConnections.first?.id,
             proxyEndpoint: proxyEndpoint
         )
         try store.save(snapshot)
