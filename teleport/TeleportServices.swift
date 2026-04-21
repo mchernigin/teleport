@@ -734,6 +734,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var proxyEndpoint: ProxyEndpoint
     @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
+    @Published private(set) var menuBarAnimationTime: TimeInterval = 0
 
     private let parser: ConnectionLinkParser
     private let store: ConfigurationStore
@@ -742,6 +743,7 @@ final class AppViewModel: ObservableObject {
     private let subscriptionClient: SubscriptionClient
     private let operationQueue = DispatchQueue(label: "dev.x.teleport.connection-operations", qos: .userInitiated)
     private var autoRefreshTimerCancellable: AnyCancellable?
+    private var menuBarAnimationCancellable: AnyCancellable?
 
     convenience init() {
         self.init(
@@ -786,6 +788,7 @@ final class AppViewModel: ObservableObject {
         normalizeSelection()
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
         startAutoRefreshTimer()
+        updateMenuBarAnimation()
     }
 
     var selectedConnection: SavedConnection? {
@@ -996,6 +999,7 @@ final class AppViewModel: ObservableObject {
                     self?.connectionPhase = .running
                     self?.proxyPhase = .enabled
                     self?.lastError = nil
+                    self?.updateMenuBarAnimation()
                 }
             } catch {
                 runtimeManager.stop()
@@ -1004,6 +1008,7 @@ final class AppViewModel: ObservableObject {
                     self?.connectionPhase = .failed
                     self?.proxyPhase = .failed
                     self?.lastError = error.localizedDescription
+                    self?.updateMenuBarAnimation()
                 }
             }
         }
@@ -1025,11 +1030,13 @@ final class AppViewModel: ObservableObject {
                     Task { @MainActor [weak self] in
                         self?.proxyPhase = .disabled
                         self?.lastError = nil
+                        self?.updateMenuBarAnimation()
                     }
                 } catch {
                     Task { @MainActor [weak self] in
                         self?.proxyPhase = .failed
                         self?.lastError = error.localizedDescription
+                        self?.updateMenuBarAnimation()
                     }
                 }
             }
@@ -1042,6 +1049,7 @@ final class AppViewModel: ObservableObject {
                     self?.proxyPhase = .disabled
                     self?.lastError = nil
                 }
+                self?.updateMenuBarAnimation()
             }
         }
     }
@@ -1058,6 +1066,7 @@ final class AppViewModel: ObservableObject {
             selectedConnectionID = savedConnection.id
             connectionPhase = .stopped
             lastError = nil
+            updateMenuBarAnimation()
             try persist()
             return true
         } catch {
@@ -1217,6 +1226,7 @@ final class AppViewModel: ObservableObject {
         refreshingSubscriptionIDs.remove(sourceID)
         lastError = nil
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
+        updateMenuBarAnimation()
         persistSettingError()
     }
 
@@ -1308,6 +1318,7 @@ final class AppViewModel: ObservableObject {
                     if resetError {
                         self?.lastError = nil
                     }
+                    self?.updateMenuBarAnimation()
                 }
             } catch {
                 Task { @MainActor [weak self] in
@@ -1315,6 +1326,7 @@ final class AppViewModel: ObservableObject {
                     if !resetError {
                         self?.lastError = error.localizedDescription
                     }
+                    self?.updateMenuBarAnimation()
                 }
             }
         }
@@ -1330,7 +1342,28 @@ final class AppViewModel: ObservableObject {
                     self.lastError = nil
                 }
             }
+            self.updateMenuBarAnimation()
         }
+    }
+
+    private func updateMenuBarAnimation() {
+        let shouldAnimate = isConnected
+
+        guard shouldAnimate else {
+            menuBarAnimationCancellable?.cancel()
+            menuBarAnimationCancellable = nil
+            menuBarAnimationTime = 0
+            return
+        }
+
+        guard menuBarAnimationCancellable == nil else { return }
+
+        menuBarAnimationTime = Date().timeIntervalSinceReferenceDate
+        menuBarAnimationCancellable = Timer.publish(every: 1.0 / 24.0, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] now in
+                self?.menuBarAnimationTime = now.timeIntervalSinceReferenceDate
+            }
     }
 
     private func persistSettingError() {

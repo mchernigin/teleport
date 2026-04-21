@@ -34,7 +34,11 @@ struct TeleportApp: App {
         MenuBarExtra {
             MenuBarView(viewModel: viewModel)
         } label: {
-            MenuBarIconView(phase: viewModel.connectionPhase, proxyPhase: viewModel.proxyPhase)
+            MenuBarIconView(
+                phase: viewModel.connectionPhase,
+                proxyPhase: viewModel.proxyPhase,
+                animationTime: viewModel.menuBarAnimationTime
+            )
         }
         .menuBarExtraStyle(.window)
 
