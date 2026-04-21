@@ -51,9 +51,18 @@ struct ConnectionLinkParser {
         }
 
         let transport = try parseTransport(query: query)
+        if transport == .grpc {
+            guard !(query["serviceName"] ?? "").isEmpty else {
+                throw ConfigurationError.missingParameter("serviceName")
+            }
+        }
+
         let flow = query["flow"]?.lowercased()
         if let flow, !flow.isEmpty {
-            guard flow == "xtls-rprx-vision", security == .reality, transport == .tcp else {
+            let supportsVisionFlow = flow == "xtls-rprx-vision"
+                && transport == .tcp
+                && (security == .tls || security == .reality)
+            guard supportsVisionFlow else {
                 throw ConfigurationError.unsupportedFlow(flow)
             }
         }
@@ -76,7 +85,10 @@ struct ConnectionLinkParser {
             spiderX: query["spx"],
             vlessUserID: user,
             vlessFlow: flow,
-            trojanPassword: nil
+            trojanPassword: nil,
+            allowsInsecureTLS: parseAllowsInsecureTLS(query: query),
+            grpcServiceName: query["serviceName"],
+            transportMode: query["mode"]
         )
     }
 
@@ -97,8 +109,13 @@ struct ConnectionLinkParser {
 
         switch security {
         case .tls:
-            guard transport == .tcp || transport == .ws else {
+            guard transport == .tcp || transport == .ws || transport == .grpc else {
                 throw ConfigurationError.unsupportedTransport(transport.rawValue)
+            }
+            if transport == .grpc {
+                guard !(query["serviceName"] ?? "").isEmpty else {
+                    throw ConfigurationError.missingParameter("serviceName")
+                }
             }
         case .reality:
             guard transport == .tcp else {
@@ -132,7 +149,10 @@ struct ConnectionLinkParser {
             spiderX: query["spx"],
             vlessUserID: nil,
             vlessFlow: nil,
-            trojanPassword: password
+            trojanPassword: password,
+            allowsInsecureTLS: parseAllowsInsecureTLS(query: query),
+            grpcServiceName: query["serviceName"],
+            transportMode: query["mode"]
         )
     }
 
@@ -168,6 +188,20 @@ struct ConnectionLinkParser {
 
     nonisolated private func parseALPN(query: [String: String]) -> [String] {
         query["alpn"]?.split(separator: ",").map { String($0) } ?? []
+    }
+
+    nonisolated private func parseAllowsInsecureTLS(query: [String: String]) -> Bool {
+        parseBooleanQueryValue(query["insecure"]) || parseBooleanQueryValue(query["allowInsecure"])
+    }
+
+    nonisolated private func parseBooleanQueryValue(_ value: String?) -> Bool {
+        guard let value else { return false }
+        switch value.lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -472,6 +506,28 @@ struct XrayConfigurationWriter {
             streamSettings["wsSettings"] = wsSettings
         }
 
+        if configuration.transport == .grpc {
+            streamSettings["grpcSettings"] = [
+                "serviceName": configuration.grpcServiceName ?? ""
+            ]
+        }
+
+        if configuration.transport == .xhttp {
+            var xhttpSettings: [String: Any] = [
+                "path": configuration.path ?? "/"
+            ]
+
+            if let hostHeader = configuration.hostHeader, !hostHeader.isEmpty {
+                xhttpSettings["host"] = hostHeader
+            }
+
+            if let mode = configuration.transportMode, !mode.isEmpty {
+                xhttpSettings["mode"] = mode
+            }
+
+            streamSettings["xhttpSettings"] = xhttpSettings
+        }
+
         if configuration.security == .tls {
             var tlsSettings: [String: Any] = [
                 "serverName": configuration.serverName ?? configuration.host
@@ -479,6 +535,10 @@ struct XrayConfigurationWriter {
 
             if !configuration.alpn.isEmpty {
                 tlsSettings["alpn"] = configuration.alpn
+            }
+
+            if configuration.allowsInsecureTLS {
+                tlsSettings["allowInsecure"] = true
             }
 
             streamSettings["tlsSettings"] = tlsSettings

@@ -38,6 +38,9 @@ enum ConnectionProtocolType: String, Codable, CaseIterable {
 enum ConnectionTransport: String, Codable, CaseIterable {
     case tcp
     case ws
+    case grpc
+    case xhttp
+    case raw
 }
 
 enum ConnectionSecurity: String, Codable, CaseIterable {
@@ -65,6 +68,9 @@ struct ConnectionConfiguration: Codable, Equatable {
     let vlessUserID: String?
     let vlessFlow: String?
     let trojanPassword: String?
+    let allowsInsecureTLS: Bool
+    let grpcServiceName: String?
+    let transportMode: String?
 
     var displayName: String {
         if let remarks, !remarks.isEmpty {
@@ -75,6 +81,153 @@ struct ConnectionConfiguration: Codable, Equatable {
 
     var endpointSummary: String {
         "\(host):\(port)"
+    }
+
+    var descriptiveSummary: String {
+        var parts = [protocolType.displayName, securitySummary, transportSummary]
+
+        if let vlessFlow, !vlessFlow.isEmpty, vlessFlow == "xtls-rprx-vision" {
+            parts.append("Vision")
+        }
+
+        if allowsInsecureTLS {
+            parts.append("Insecure TLS")
+        }
+
+        return parts.joined(separator: " • ")
+    }
+
+    var securityWarningText: String? {
+        if security == .none {
+            return "Traffic is not encrypted"
+        }
+
+        if allowsInsecureTLS {
+            return "TLS certificate verification is disabled"
+        }
+
+        return nil
+    }
+
+    private var securitySummary: String {
+        switch security {
+        case .none:
+            return "No encryption"
+        case .tls:
+            return "TLS"
+        case .reality:
+            return "Reality"
+        }
+    }
+
+    private var transportSummary: String {
+        switch transport {
+        case .tcp:
+            return "TCP"
+        case .ws:
+            return "WebSocket"
+        case .grpc:
+            return "gRPC"
+        case .xhttp:
+            return "xHTTP"
+        case .raw:
+            return "RAW"
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case rawLink
+        case protocolType
+        case host
+        case port
+        case remarks
+        case security
+        case transport
+        case path
+        case hostHeader
+        case serverName
+        case alpn
+        case fingerprint
+        case publicKey
+        case shortID
+        case spiderX
+        case vlessUserID
+        case vlessFlow
+        case trojanPassword
+        case allowsInsecureTLS
+        case grpcServiceName
+        case transportMode
+    }
+
+    init(
+        rawLink: String,
+        protocolType: ConnectionProtocolType,
+        host: String,
+        port: Int,
+        remarks: String?,
+        security: ConnectionSecurity,
+        transport: ConnectionTransport,
+        path: String?,
+        hostHeader: String?,
+        serverName: String?,
+        alpn: [String],
+        fingerprint: String?,
+        publicKey: String?,
+        shortID: String?,
+        spiderX: String?,
+        vlessUserID: String?,
+        vlessFlow: String?,
+        trojanPassword: String?,
+        allowsInsecureTLS: Bool = false,
+        grpcServiceName: String? = nil,
+        transportMode: String? = nil
+    ) {
+        self.rawLink = rawLink
+        self.protocolType = protocolType
+        self.host = host
+        self.port = port
+        self.remarks = remarks
+        self.security = security
+        self.transport = transport
+        self.path = path
+        self.hostHeader = hostHeader
+        self.serverName = serverName
+        self.alpn = alpn
+        self.fingerprint = fingerprint
+        self.publicKey = publicKey
+        self.shortID = shortID
+        self.spiderX = spiderX
+        self.vlessUserID = vlessUserID
+        self.vlessFlow = vlessFlow
+        self.trojanPassword = trojanPassword
+        self.allowsInsecureTLS = allowsInsecureTLS
+        self.grpcServiceName = grpcServiceName
+        self.transportMode = transportMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rawLink = try container.decode(String.self, forKey: .rawLink)
+        protocolType = try container.decode(ConnectionProtocolType.self, forKey: .protocolType)
+        host = try container.decode(String.self, forKey: .host)
+        port = try container.decode(Int.self, forKey: .port)
+        remarks = try container.decodeIfPresent(String.self, forKey: .remarks)
+        security = try container.decode(ConnectionSecurity.self, forKey: .security)
+        transport = try container.decode(ConnectionTransport.self, forKey: .transport)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
+        hostHeader = try container.decodeIfPresent(String.self, forKey: .hostHeader)
+        serverName = try container.decodeIfPresent(String.self, forKey: .serverName)
+        alpn = try container.decodeIfPresent([String].self, forKey: .alpn) ?? []
+        fingerprint = try container.decodeIfPresent(String.self, forKey: .fingerprint)
+        publicKey = try container.decodeIfPresent(String.self, forKey: .publicKey)
+        shortID = try container.decodeIfPresent(String.self, forKey: .shortID)
+        spiderX = try container.decodeIfPresent(String.self, forKey: .spiderX)
+        vlessUserID = try container.decodeIfPresent(String.self, forKey: .vlessUserID)
+        vlessFlow = try container.decodeIfPresent(String.self, forKey: .vlessFlow)
+        trojanPassword = try container.decodeIfPresent(String.self, forKey: .trojanPassword)
+        allowsInsecureTLS = try container.decodeIfPresent(Bool.self, forKey: .allowsInsecureTLS) ?? false
+        grpcServiceName = try container.decodeIfPresent(String.self, forKey: .grpcServiceName)
+        transportMode = try container.decodeIfPresent(String.self, forKey: .transportMode)
     }
 }
 
@@ -332,7 +485,10 @@ extension LegacyVLESSConfiguration {
             spiderX: spiderX,
             vlessUserID: userID,
             vlessFlow: flow,
-            trojanPassword: nil
+            trojanPassword: nil,
+            allowsInsecureTLS: false,
+            grpcServiceName: nil,
+            transportMode: nil
         )
     }
 }

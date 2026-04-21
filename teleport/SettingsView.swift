@@ -123,11 +123,24 @@ private struct ConnectionsSettingsView: View {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(configuration.displayName)
-                            .foregroundStyle(.primary)
-                        Text("\(configuration.protocolType.displayName) • \(configuration.endpointSummary)")
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(configuration.displayName)
+                                .foregroundStyle(.primary)
+
+                            if let warning = configuration.securityWarningText {
+                                Label(warning, systemImage: "exclamationmark.shield.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+
+                        Text(configuration.descriptiveSummary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        Text(configuration.endpointSummary)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -259,11 +272,24 @@ private struct ConnectionsSettingsView: View {
                         .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(configuration.displayName)
-                            .foregroundStyle(.primary)
-                        Text("\(configuration.protocolType.displayName) • \(configuration.endpointSummary)")
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(configuration.displayName)
+                                .foregroundStyle(.primary)
+
+                            if let warning = configuration.securityWarningText {
+                                Label(warning, systemImage: "exclamationmark.shield.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+
+                        Text(configuration.descriptiveSummary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        Text(configuration.endpointSummary)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
 
                     Spacer(minLength: 0)
@@ -314,9 +340,9 @@ private struct ConnectionsSettingsView: View {
     private func actionIcon(_ systemName: String) -> some View {
         Image(systemName: systemName)
             .symbolRenderingMode(.monochrome)
-            .font(.system(size: 17, weight: .regular))
+            .font(.system(size: 14, weight: .regular))
             .foregroundStyle(.primary)
-            .frame(width: 18, height: 18, alignment: .center)
+            .frame(width: 15, height: 15, alignment: .center)
             .contentShape(Rectangle())
     }
 
@@ -386,7 +412,7 @@ private struct ShareActionPopover: View {
             Button {
                 onCopy()
             } label: {
-                Label("Copy connection", systemImage: "doc.on.doc")
+                Label("Copy URL", systemImage: "doc.on.doc")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)

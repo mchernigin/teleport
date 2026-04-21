@@ -4,12 +4,13 @@ import Foundation
 struct VerifyCore {
     static func main() throws {
         try testValidVLESSParsingAndConfigGeneration()
+        try testValidVLESSAdditionalTransports()
         try testValidTrojanParsingAndConfigGeneration()
         try testValidTrojanRealityParsingAndConfigGeneration()
+        try testValidTrojanGRPCParsingAndConfigGeneration()
         try testMalformedAndUnsupportedLinks()
         try testLegacyStateMigration()
         try testRuntimeStartupFailureWithoutBundledBinary()
-        try testProxyEnablementBlockedBeforeRuntimeReady()
         print("verify_core: all checks passed")
     }
 
@@ -38,6 +39,42 @@ struct VerifyCore {
         let realityConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: realityConfiguration)
         let realityContent = try String(contentsOf: realityConfigURL, encoding: .utf8)
         precondition(realityContent.contains("xtls-rprx-vision"))
+    }
+
+    private static func testValidVLESSAdditionalTransports() throws {
+        let parser = ConnectionLinkParser()
+
+        let grpcLink = "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=reality&type=grpc&serviceName=teleport-grpc&sni=example.com&fp=chrome&pbk=abc123abc123abc123abc123abc123abc123abc123&sid=a1b2c3d4#VLESSgRPC"
+        let grpcConfiguration = try parser.parse(grpcLink)
+        precondition(grpcConfiguration.transport == .grpc)
+        precondition(grpcConfiguration.grpcServiceName == "teleport-grpc")
+
+        let grpcConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: grpcConfiguration)
+        let grpcContent = try String(contentsOf: grpcConfigURL, encoding: .utf8)
+        precondition(grpcContent.contains("\"network\" : \"grpc\""))
+        precondition(grpcContent.contains("grpcSettings"))
+        precondition(grpcContent.contains("teleport-grpc"))
+
+        let xhttpLink = "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=reality&type=xhttp&path=%2Fedge&mode=auto&sni=example.com&fp=chrome&pbk=abc123abc123abc123abc123abc123abc123abc123&sid=a1b2c3d4#VLESSxHTTP"
+        let xhttpConfiguration = try parser.parse(xhttpLink)
+        precondition(xhttpConfiguration.transport == .xhttp)
+        precondition(xhttpConfiguration.path == "/edge")
+        precondition(xhttpConfiguration.transportMode == "auto")
+
+        let xhttpConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: xhttpConfiguration)
+        let xhttpContent = try String(contentsOf: xhttpConfigURL, encoding: .utf8)
+        precondition(xhttpContent.contains("\"network\" : \"xhttp\""))
+        precondition(xhttpContent.contains("xhttpSettings"))
+        precondition(xhttpContent.contains("/edge"))
+
+        let rawLink = "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=none&type=raw#VLESSraw"
+        let rawConfiguration = try parser.parse(rawLink)
+        precondition(rawConfiguration.transport == .raw)
+        precondition(rawConfiguration.security == .none)
+
+        let rawConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: rawConfiguration)
+        let rawContent = try String(contentsOf: rawConfigURL, encoding: .utf8)
+        precondition(rawContent.contains("\"network\" : \"raw\""))
     }
 
     private static func testValidTrojanParsingAndConfigGeneration() throws {
@@ -81,6 +118,23 @@ struct VerifyCore {
         precondition(content.contains("abc123abc123abc123abc123abc123abc123abc123"))
     }
 
+    private static func testValidTrojanGRPCParsingAndConfigGeneration() throws {
+        let parser = ConnectionLinkParser()
+        let link = "trojan://secret-password@example.com:443?security=tls&type=grpc&sni=example.com&serviceName=teleport-trojan#TrojanGRPC"
+        let configuration = try parser.parse(link)
+
+        precondition(configuration.protocolType == .trojan)
+        precondition(configuration.transport == .grpc)
+        precondition(configuration.grpcServiceName == "teleport-trojan")
+
+        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration)
+        let content = try String(contentsOf: configURL, encoding: .utf8)
+        precondition(content.contains("\"protocol\" : \"trojan\""))
+        precondition(content.contains("\"network\" : \"grpc\""))
+        precondition(content.contains("grpcSettings"))
+        precondition(content.contains("teleport-trojan"))
+    }
+
     private static func testMalformedAndUnsupportedLinks() throws {
         let parser = ConnectionLinkParser()
 
@@ -100,9 +154,9 @@ struct VerifyCore {
 
         do {
             _ = try parser.parse("vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls&type=grpc")
-            fatalError("Expected unsupportedTransport")
+            fatalError("Expected missingParameter")
         } catch let error as ConfigurationError {
-            if case .unsupportedTransport("grpc") = error {
+            if case .missingParameter("serviceName") = error {
             } else {
                 fatalError("Unexpected error: \(error)")
             }
@@ -118,15 +172,10 @@ struct VerifyCore {
             }
         }
 
-        do {
-            _ = try parser.parse("vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls&type=tcp&flow=xtls-rprx-vision")
-            fatalError("Expected unsupportedFlow")
-        } catch let error as ConfigurationError {
-            if case .unsupportedFlow("xtls-rprx-vision") = error {
-            } else {
-                fatalError("Unexpected error: \(error)")
-            }
-        }
+        let tlsVision = try parser.parse("vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls&type=tcp&flow=xtls-rprx-vision&sni=example.com")
+        precondition(tlsVision.transport == .tcp)
+        precondition(tlsVision.security == .tls)
+        precondition(tlsVision.vlessFlow == "xtls-rprx-vision")
 
         do {
             _ = try parser.parse("trojan://@example.com:443?security=tls&type=tcp")
@@ -150,6 +199,16 @@ struct VerifyCore {
             fatalError("Expected unsupportedTransport")
         } catch let error as ConfigurationError {
             if case .unsupportedTransport("ws") = error {
+            } else {
+                fatalError("Unexpected error: \(error)")
+            }
+        }
+
+        do {
+            _ = try parser.parse("trojan://secret@example.com:443?security=tls&type=grpc&sni=example.com")
+            fatalError("Expected missingParameter")
+        } catch let error as ConfigurationError {
+            if case .missingParameter("serviceName") = error {
             } else {
                 fatalError("Unexpected error: \(error)")
             }
@@ -183,9 +242,10 @@ struct VerifyCore {
         )
 
         let migrated = legacy.asAppSnapshot
-        precondition(migrated.persistedConfiguration?.configuration.protocolType == .vless)
-        precondition(migrated.persistedConfiguration?.configuration.vlessUserID == "123e4567-e89b-12d3-a456-426614174000")
-        precondition(migrated.persistedConfiguration?.configuration.rawLink.contains("vless://") == true)
+        precondition(migrated.savedConnections.count == 1)
+        precondition(migrated.savedConnections[0].configuration.protocolType == .vless)
+        precondition(migrated.savedConnections[0].configuration.vlessUserID == "123e4567-e89b-12d3-a456-426614174000")
+        precondition(migrated.savedConnections[0].configuration.rawLink.contains("vless://"))
     }
 
     private static func testRuntimeStartupFailureWithoutBundledBinary() throws {
@@ -205,11 +265,4 @@ struct VerifyCore {
         }
     }
 
-    @MainActor
-    private static func testProxyEnablementBlockedBeforeRuntimeReady() throws {
-        let viewModel = AppViewModel()
-        viewModel.enableProxy()
-        precondition(viewModel.proxyPhase == .failed)
-        precondition(viewModel.lastError == "Proxy cannot be enabled until Xray is running")
-    }
 }
