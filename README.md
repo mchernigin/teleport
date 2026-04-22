@@ -9,6 +9,7 @@ Teleport is a small macOS menu bar app for running a local Xray-based proxy with
 - support for `vless://` and `trojan://` links
 - support for `http://` and `https://` subscription URLs that fetch and import multiple configs
 - saved connections with persistent selection across launches
+- lightweight server health checks with persisted sampled TCP latency and availability state
 - dedicated Settings window for connection and subscription management
 - only system proxy for now (Tun mode will be added later)
 
@@ -28,4 +29,12 @@ A focused verification script for subscription parsing, persistence, and selecti
 
 ```bash
 swift teleport/TeleportModels.swift teleport/TeleportServices.swift scripts/verify_subscription_support.swift
+```
+
+## Connection health verification script
+
+A focused verification script for health metadata persistence, freshness classification, and subscription reconciliation is available at:
+
+```bash
+swift teleport/TeleportModels.swift teleport/TeleportServices.swift scripts/verify_connection_health.swift
 ```

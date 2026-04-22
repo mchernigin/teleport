@@ -101,6 +101,12 @@ struct MenuBarView: View {
                             }
                         }
                     }
+
+                    Divider()
+
+                    Button("Refresh health") {
+                        viewModel.refreshVisibleConnectionHealth()
+                    }
                 } label: {
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -134,11 +140,12 @@ struct MenuBarView: View {
             return "Choose a connection"
         }
 
+        let healthSummary = viewModel.healthSummary(for: selectedConnection)
         if let source = viewModel.subscriptionSource(for: selectedConnection) {
-            return "From \(source.displayName)"
+            return "From \(source.displayName) • \(healthSummary)"
         }
 
-        return "Manual connection"
+        return "Manual • \(healthSummary)"
     }
 
     @ViewBuilder
@@ -163,8 +170,12 @@ struct MenuBarView: View {
         } label: {
             let isSelected = connection.id == viewModel.selectedConnectionID
             let prefix = isSelected ? "✓ " : ""
-            Text(prefix + connection.configuration.displayName)
+            Text(prefix + connectionLabel(for: connection))
         }
+    }
+
+    private func connectionLabel(for connection: SavedConnection) -> String {
+        "\(connection.configuration.displayName) • \(viewModel.healthSummary(for: connection))"
     }
 
     private var actionSection: some View {

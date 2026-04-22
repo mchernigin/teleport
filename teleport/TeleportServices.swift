@@ -277,13 +277,21 @@ struct SubscriptionConnectionReconciler {
             guard let source = connection.source else { return nil }
             return (source.subscriptionEntryID, connection.savedAt)
         })
+        let existingHealthByEntry: [String: ConnectionHealthCheck] = Dictionary(uniqueKeysWithValues: previousImportedEntries.compactMap { connection in
+            guard let source = connection.source,
+                  let healthCheck = connection.healthCheck else {
+                return nil
+            }
+            return (source.subscriptionEntryID, healthCheck)
+        })
 
         let replacementConnections = importedEntries.map { entry in
             SavedConnection(
                 id: existingIDsByEntry[entry.sourceEntryID] ?? UUID(),
                 configuration: entry.configuration,
                 savedAt: existingSavedAtByEntry[entry.sourceEntryID] ?? fetchedAt,
-                source: ConnectionSourceMetadata(subscriptionSourceID: sourceID, subscriptionEntryID: entry.sourceEntryID)
+                source: ConnectionSourceMetadata(subscriptionSourceID: sourceID, subscriptionEntryID: entry.sourceEntryID),
+                healthCheck: existingHealthByEntry[entry.sourceEntryID]
             )
         }
         .sorted { lhs, rhs in
@@ -724,6 +732,159 @@ final class SystemProxyService: @unchecked Sendable {
     }
 }
 
+struct ConnectionHealthProbeResult {
+    let state: ConnectionHealthState
+    let checkedAt: Date
+    let latencyMilliseconds: Int?
+    let failureSummary: String?
+}
+
+final class ConnectionHealthProbeService: @unchecked Sendable {
+    private let attemptCount: Int
+    private let tcpTimeoutSeconds: Int
+    private let pingTimeoutMilliseconds: Int
+
+    init(
+        attemptCount: Int = 3,
+        tcpTimeoutSeconds: Int = 3,
+        pingTimeoutMilliseconds: Int = 1000
+    ) {
+        self.attemptCount = max(1, attemptCount)
+        self.tcpTimeoutSeconds = max(1, tcpTimeoutSeconds)
+        self.pingTimeoutMilliseconds = max(100, pingTimeoutMilliseconds)
+    }
+
+    func probe(_ connection: SavedConnection) async -> ConnectionHealthProbeResult {
+        guard UInt16(exactly: connection.configuration.port) != nil else {
+            return ConnectionHealthProbeResult(
+                state: .unreachable,
+                checkedAt: Date(),
+                latencyMilliseconds: nil,
+                failureSummary: "Invalid port"
+            )
+        }
+
+        let checkedAt = Date()
+        let availabilityResult = await tcpAvailabilityCheck(connection)
+
+        guard availabilityResult.isReachable else {
+            return ConnectionHealthProbeResult(
+                state: .unreachable,
+                checkedAt: checkedAt,
+                latencyMilliseconds: nil,
+                failureSummary: availabilityResult.failureSummary ?? "Unavailable"
+            )
+        }
+
+        let pingLatencies = await pingSamples(host: connection.configuration.host)
+        if !pingLatencies.isEmpty {
+            return ConnectionHealthProbeResult(
+                state: .reachable,
+                checkedAt: checkedAt,
+                latencyMilliseconds: Self.median(pingLatencies),
+                failureSummary: nil
+            )
+        }
+
+        return ConnectionHealthProbeResult(
+            state: .reachable,
+            checkedAt: checkedAt,
+            latencyMilliseconds: nil,
+            failureSummary: nil
+        )
+    }
+
+    private func tcpAvailabilityCheck(_ connection: SavedConnection) async -> (isReachable: Bool, failureSummary: String?) {
+        do {
+            let result = try await runCommand(
+                executable: "/usr/bin/nc",
+                arguments: ["-z", "-G", String(tcpTimeoutSeconds), connection.configuration.host, String(connection.configuration.port)]
+            )
+            return (result.terminationStatus == 0, result.terminationStatus == 0 ? nil : summarizedNetcatFailure(result.standardError))
+        } catch {
+            return (false, error.localizedDescription)
+        }
+    }
+
+    private func pingSamples(host: String) async -> [Int] {
+        do {
+            let result = try await runCommand(
+                executable: "/sbin/ping",
+                arguments: ["-c", String(attemptCount), "-W", String(pingTimeoutMilliseconds), host]
+            )
+            guard result.terminationStatus == 0 || result.terminationStatus == 2 else {
+                return []
+            }
+            return parsePingLatencies(result.standardOutput)
+        } catch {
+            return []
+        }
+    }
+
+    private func runCommand(executable: String, arguments: [String]) async throws -> (terminationStatus: Int32, standardOutput: String, standardError: String) {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+
+            process.terminationHandler = { process in
+                let stdout = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                let stderr = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                continuation.resume(returning: (process.terminationStatus, stdout, stderr))
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    private func parsePingLatencies(_ output: String) -> [Int] {
+        output
+            .split(separator: "\n")
+            .compactMap { line -> Int? in
+                guard let range = line.range(of: "time=") else { return nil }
+                let suffix = line[range.upperBound...]
+                let value = suffix.prefix { $0.isNumber || $0 == "." }
+                guard let milliseconds = Double(value) else { return nil }
+                return Int(milliseconds.rounded())
+            }
+    }
+
+    private func summarizedNetcatFailure(_ standardError: String) -> String {
+        let trimmed = standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "TCP probe failed"
+        }
+        if trimmed.localizedCaseInsensitiveContains("timed out") {
+            return "Timed out"
+        }
+        if trimmed.localizedCaseInsensitiveContains("refused") {
+            return "Connection refused"
+        }
+        if trimmed.localizedCaseInsensitiveContains("nodename nor servname provided") {
+            return "DNS resolution failed"
+        }
+        return trimmed
+    }
+
+    private static func median(_ values: [Int]) -> Int {
+        let sorted = values.sorted()
+        let middle = sorted.count / 2
+        if sorted.count.isMultiple(of: 2) {
+            return Int(((Double(sorted[middle - 1]) + Double(sorted[middle])) / 2.0).rounded())
+        }
+        return sorted[middle]
+    }
+}
+
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published private(set) var savedConnections: [SavedConnection]
@@ -734,6 +895,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var proxyEndpoint: ProxyEndpoint
     @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
+    @Published private(set) var refreshingHealthConnectionIDs: Set<UUID> = []
     @Published private(set) var menuBarAnimationTime: TimeInterval = 0
 
     private let parser: ConnectionLinkParser
@@ -741,9 +903,20 @@ final class AppViewModel: ObservableObject {
     private let runtimeManager: XrayRuntimeManager
     private let proxyService: SystemProxyService
     private let subscriptionClient: SubscriptionClient
+    private let healthProbeService: ConnectionHealthProbeService
     private let operationQueue = DispatchQueue(label: "dev.x.teleport.connection-operations", qos: .userInitiated)
+    private let persistenceQueue = DispatchQueue(label: "dev.x.teleport.persistence", qos: .utility)
+    private let healthFreshnessTTL: TimeInterval = 30 * 60
+    private let automaticHealthProbeLimit = 1
+    private let healthProbeConcurrencyLimit = 1
     private var autoRefreshTimerCancellable: AnyCancellable?
     private var menuBarAnimationCancellable: AnyCancellable?
+    private var pendingHealthProbeIDs: [UUID] = []
+    private var pendingHealthProbeIDSet: Set<UUID> = []
+    private var activeHealthProbeTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingHealthProbeResults: [UUID: ConnectionHealthProbeResult] = [:]
+    private var applyHealthResultsWorkItem: DispatchWorkItem?
+    private var persistWorkItem: DispatchWorkItem?
 
     convenience init() {
         self.init(
@@ -751,7 +924,8 @@ final class AppViewModel: ObservableObject {
             store: ConfigurationStore(),
             runtimeManager: XrayRuntimeManager(),
             proxyService: SystemProxyService(),
-            subscriptionClient: SubscriptionClient()
+            subscriptionClient: SubscriptionClient(),
+            healthProbeService: ConnectionHealthProbeService()
         )
     }
 
@@ -760,13 +934,15 @@ final class AppViewModel: ObservableObject {
         store: ConfigurationStore,
         runtimeManager: XrayRuntimeManager,
         proxyService: SystemProxyService,
-        subscriptionClient: SubscriptionClient
+        subscriptionClient: SubscriptionClient,
+        healthProbeService: ConnectionHealthProbeService
     ) {
         self.parser = parser
         self.store = store
         self.runtimeManager = runtimeManager
         self.proxyService = proxyService
         self.subscriptionClient = subscriptionClient
+        self.healthProbeService = healthProbeService
 
         let snapshot = store.load()
         proxyEndpoint = snapshot.proxyEndpoint
@@ -778,7 +954,8 @@ final class AppViewModel: ObservableObject {
                     id: savedConnection.id,
                     configuration: reparsedConfiguration,
                     savedAt: savedConnection.savedAt,
-                    source: savedConnection.source
+                    source: savedConnection.source,
+                    healthCheck: savedConnection.healthCheck?.normalizedForPersistence
                 )
             }
             return savedConnection
@@ -789,6 +966,7 @@ final class AppViewModel: ObservableObject {
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
         startAutoRefreshTimer()
         updateMenuBarAnimation()
+        scheduleInitialHealthRefresh()
     }
 
     var selectedConnection: SavedConnection? {
@@ -858,6 +1036,67 @@ final class AppViewModel: ObservableObject {
         refreshingSubscriptionIDs.contains(sourceID)
     }
 
+    func isRefreshingHealth(for connectionID: UUID) -> Bool {
+        refreshingHealthConnectionIDs.contains(connectionID)
+    }
+
+    func healthCheck(for connection: SavedConnection) -> ConnectionHealthCheck {
+        if refreshingHealthConnectionIDs.contains(connection.id) {
+            var checking = connection.healthCheck ?? .unknown
+            checking.state = .checking
+            return checking
+        }
+
+        guard let healthCheck = connection.healthCheck else {
+            return .unknown
+        }
+
+        let freshness = healthCheck.freshness(now: Date(), ttl: healthFreshnessTTL)
+        switch freshness {
+        case .fresh:
+            return healthCheck
+        case .stale:
+            var stale = healthCheck
+            stale.state = .unknown
+            return stale
+        case .unknown:
+            return .unknown
+        }
+    }
+
+    func healthSummary(for connection: SavedConnection) -> String {
+        let healthCheck = healthCheck(for: connection)
+        switch healthCheck.state {
+        case .reachable:
+            if let latency = healthCheck.latencyMilliseconds {
+                return "Latency \(latency) ms"
+            }
+            return "Available"
+        case .unreachable:
+            return healthCheck.failureSummary ?? "Unavailable"
+        case .checking:
+            return "Checking…"
+        case .unknown:
+            if let checkedAt = connection.healthCheck?.checkedAt {
+                return "Unknown • checked \(Self.relativeFormatter.localizedString(for: checkedAt, relativeTo: Date()))"
+            }
+            return "Not checked"
+        }
+    }
+
+    func refreshConnectionHealth(id: UUID, force: Bool = true) {
+        enqueueHealthProbes(for: [id], force: force, priority: true)
+    }
+
+    func refreshSubscriptionHealth(id: UUID, force: Bool = true) {
+        let ids = importedConnections(for: id).map(\.id)
+        enqueueHealthProbes(for: ids, force: force, priority: true)
+    }
+
+    func refreshVisibleConnectionHealth(force: Bool = true) {
+        enqueueHealthProbes(for: savedConnections.map(\.id), force: force, priority: true)
+    }
+
     @discardableResult
     func addConnection(from rawValue: String) -> Bool {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -882,6 +1121,7 @@ final class AppViewModel: ObservableObject {
         }
 
         let removedConnection = savedConnections.remove(at: index)
+        cancelHealthProbe(id: id)
         if selectedConnectionID == removedConnection.id {
             recoverSelection(afterRemovingConnectionAt: index)
         } else {
@@ -904,6 +1144,8 @@ final class AppViewModel: ObservableObject {
         savedConnections.removeAll { $0.source?.subscriptionSourceID == id }
         subscriptionSources.removeAll { $0.id == id }
         refreshingSubscriptionIDs.remove(id)
+        let removedIDs = Set(affectedConnections.map(\.id))
+        cancelHealthProbes(ids: removedIDs)
         normalizeSelection()
         lastError = nil
         persistSettingError()
@@ -921,6 +1163,7 @@ final class AppViewModel: ObservableObject {
         }
         lastError = nil
         persistSettingError()
+        enqueueHealthProbes(for: [id], force: false, priority: true)
     }
 
     func refreshSubscription(id: UUID) {
@@ -1068,6 +1311,7 @@ final class AppViewModel: ObservableObject {
             lastError = nil
             updateMenuBarAnimation()
             try persist()
+            enqueueHealthProbes(for: [savedConnection.id], force: true, priority: true)
             return true
         } catch {
             lastError = error.localizedDescription
@@ -1228,6 +1472,7 @@ final class AppViewModel: ObservableObject {
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
         updateMenuBarAnimation()
         persistSettingError()
+        refreshSubscriptionHealth(id: sourceID, force: true)
     }
 
     private func validateSubscriptionURL(_ rawURL: String) throws -> URL {
@@ -1262,6 +1507,7 @@ final class AppViewModel: ObservableObject {
             .autoconnect()
             .sink { [weak self] _ in
                 self?.performScheduledSubscriptionRefreshes()
+                self?.performScheduledHealthRefreshes()
             }
     }
 
@@ -1281,6 +1527,134 @@ final class AppViewModel: ObservableObject {
             }
 
             refreshSubscription(id: source.id, autoSelectFirstImported: false)
+        }
+    }
+
+    private func scheduleInitialHealthRefresh() {
+        guard let selectedConnectionID else { return }
+        enqueueHealthProbes(for: [selectedConnectionID], force: false, priority: true)
+    }
+
+    private func performScheduledHealthRefreshes() {
+        guard let selectedConnection,
+              needsHealthRefresh(for: selectedConnection) else {
+            return
+        }
+
+        enqueueHealthProbes(for: [selectedConnection.id], force: false, priority: false)
+    }
+
+    private func needsHealthRefresh(for connection: SavedConnection) -> Bool {
+        guard let healthCheck = connection.healthCheck else {
+            return true
+        }
+
+        switch healthCheck.freshness(now: Date(), ttl: healthFreshnessTTL) {
+        case .fresh:
+            return false
+        case .stale, .unknown:
+            return true
+        }
+    }
+
+    private func enqueueHealthProbes(for ids: [UUID], force: Bool, priority: Bool) {
+        guard !ids.isEmpty else { return }
+
+        for id in ids {
+            guard let connection = savedConnections.first(where: { $0.id == id }) else { continue }
+            guard force || needsHealthRefresh(for: connection) else { continue }
+            guard activeHealthProbeTasks[id] == nil else { continue }
+            guard !pendingHealthProbeIDSet.contains(id) else { continue }
+
+            if priority {
+                pendingHealthProbeIDs.insert(id, at: 0)
+            } else {
+                pendingHealthProbeIDs.append(id)
+            }
+            pendingHealthProbeIDSet.insert(id)
+        }
+
+        drainHealthProbeQueue()
+    }
+
+    private func drainHealthProbeQueue() {
+        while activeHealthProbeTasks.count < healthProbeConcurrencyLimit,
+              let nextID = pendingHealthProbeIDs.first {
+            pendingHealthProbeIDs.removeFirst()
+            pendingHealthProbeIDSet.remove(nextID)
+
+            guard let connection = savedConnections.first(where: { $0.id == nextID }) else {
+                continue
+            }
+
+            refreshingHealthConnectionIDs.insert(nextID)
+            let task = Task.detached(priority: .utility) { [healthProbeService, connection, nextID] in
+                let result = await healthProbeService.probe(connection)
+                await MainActor.run {
+                    self.enqueueHealthProbeResult(result, for: nextID)
+                }
+            }
+            activeHealthProbeTasks[nextID] = task
+        }
+    }
+
+    private func enqueueHealthProbeResult(_ result: ConnectionHealthProbeResult, for connectionID: UUID) {
+        activeHealthProbeTasks[connectionID] = nil
+        pendingHealthProbeResults[connectionID] = result
+        scheduleHealthResultApplication()
+        drainHealthProbeQueue()
+    }
+
+    private func scheduleHealthResultApplication() {
+        guard applyHealthResultsWorkItem == nil else { return }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.applyPendingHealthProbeResults()
+            }
+        }
+
+        applyHealthResultsWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
+    }
+
+    private func applyPendingHealthProbeResults() {
+        applyHealthResultsWorkItem = nil
+        guard !pendingHealthProbeResults.isEmpty else { return }
+
+        let pendingResults = pendingHealthProbeResults
+        pendingHealthProbeResults = [:]
+
+        for (connectionID, result) in pendingResults {
+            refreshingHealthConnectionIDs.remove(connectionID)
+
+            guard let index = savedConnections.firstIndex(where: { $0.id == connectionID }) else {
+                continue
+            }
+
+            savedConnections[index].healthCheck = ConnectionHealthCheck(
+                state: result.state,
+                checkedAt: result.checkedAt,
+                latencyMilliseconds: result.latencyMilliseconds,
+                failureSummary: result.failureSummary
+            )
+        }
+
+        schedulePersist()
+    }
+
+    private func cancelHealthProbe(id: UUID) {
+        activeHealthProbeTasks[id]?.cancel()
+        activeHealthProbeTasks[id] = nil
+        refreshingHealthConnectionIDs.remove(id)
+        pendingHealthProbeIDSet.remove(id)
+        pendingHealthProbeIDs.removeAll { $0 == id }
+    }
+
+    private func cancelHealthProbes(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            cancelHealthProbe(id: id)
         }
     }
 
@@ -1374,13 +1748,48 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func persist() throws {
-        let snapshot = AppSnapshot(
-            savedConnections: savedConnections,
+    private func schedulePersist() {
+        let snapshot = makeSnapshot()
+        persistWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [store] in
+            do {
+                try store.save(snapshot)
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.lastError = error.localizedDescription
+                }
+            }
+        }
+
+        persistWorkItem = workItem
+        persistenceQueue.asyncAfter(deadline: .now() + 0.15, execute: workItem)
+    }
+
+    private func makeSnapshot() -> AppSnapshot {
+        let persistedConnections = savedConnections.map { connection in
+            var normalizedConnection = connection
+            normalizedConnection.healthCheck = connection.healthCheck?.normalizedForPersistence
+            return normalizedConnection
+        }
+
+        return AppSnapshot(
+            savedConnections: persistedConnections,
             subscriptionSources: subscriptionSources,
             selectedConnectionID: selectedConnectionID ?? savedConnections.first?.id,
             proxyEndpoint: proxyEndpoint
         )
-        try store.save(snapshot)
     }
+
+    private func persist() throws {
+        try store.save(makeSnapshot())
+    }
+}
+
+extension AppViewModel {
+    fileprivate static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
+    }()
 }

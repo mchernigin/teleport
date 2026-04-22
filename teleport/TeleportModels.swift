@@ -18,6 +18,55 @@ enum ProxyPhase: String, Codable {
     case failed
 }
 
+enum ConnectionHealthState: String, Codable {
+    case unknown
+    case checking
+    case reachable
+    case unreachable
+}
+
+enum ConnectionHealthFreshness {
+    case fresh
+    case stale
+    case unknown
+}
+
+struct ConnectionHealthCheck: Codable, Equatable {
+    var state: ConnectionHealthState
+    var checkedAt: Date?
+    var latencyMilliseconds: Int?
+    var failureSummary: String?
+
+    static let unknown = ConnectionHealthCheck(
+        state: .unknown,
+        checkedAt: nil,
+        latencyMilliseconds: nil,
+        failureSummary: nil
+    )
+
+    var normalizedForPersistence: ConnectionHealthCheck {
+        guard state == .checking else { return self }
+        return ConnectionHealthCheck(
+            state: checkedAt == nil ? .unknown : .unknown,
+            checkedAt: checkedAt,
+            latencyMilliseconds: latencyMilliseconds,
+            failureSummary: failureSummary
+        )
+    }
+
+    func freshness(now: Date, ttl: TimeInterval) -> ConnectionHealthFreshness {
+        guard state != .unknown else {
+            return .unknown
+        }
+
+        guard let checkedAt else {
+            return .unknown
+        }
+
+        return now.timeIntervalSince(checkedAt) <= ttl ? .fresh : .stale
+    }
+}
+
 struct ProxyEndpoint: Codable, Equatable {
     let host: String
     let httpPort: Int
@@ -159,7 +208,7 @@ struct ConnectionConfiguration: Codable, Equatable {
         case transportMode
     }
 
-    init(
+    nonisolated init(
         rawLink: String,
         protocolType: ConnectionProtocolType,
         host: String,
@@ -241,16 +290,24 @@ struct SavedConnection: Codable, Equatable, Identifiable {
     let configuration: ConnectionConfiguration
     let savedAt: Date
     let source: ConnectionSourceMetadata?
+    var healthCheck: ConnectionHealthCheck?
 
     var isImported: Bool {
         source != nil
     }
 
-    init(id: UUID, configuration: ConnectionConfiguration, savedAt: Date, source: ConnectionSourceMetadata? = nil) {
+    init(
+        id: UUID,
+        configuration: ConnectionConfiguration,
+        savedAt: Date,
+        source: ConnectionSourceMetadata? = nil,
+        healthCheck: ConnectionHealthCheck? = nil
+    ) {
         self.id = id
         self.configuration = configuration
         self.savedAt = savedAt
         self.source = source
+        self.healthCheck = healthCheck
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -258,6 +315,7 @@ struct SavedConnection: Codable, Equatable, Identifiable {
         case configuration
         case savedAt
         case source
+        case healthCheck
     }
 
     init(from decoder: Decoder) throws {
@@ -266,6 +324,7 @@ struct SavedConnection: Codable, Equatable, Identifiable {
         configuration = try container.decode(ConnectionConfiguration.self, forKey: .configuration)
         savedAt = try container.decode(Date.self, forKey: .savedAt)
         source = try container.decodeIfPresent(ConnectionSourceMetadata.self, forKey: .source)
+        healthCheck = try container.decodeIfPresent(ConnectionHealthCheck.self, forKey: .healthCheck)?.normalizedForPersistence
     }
 }
 

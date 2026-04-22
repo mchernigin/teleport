@@ -127,6 +127,7 @@ private struct ConnectionsSettingsView: View {
     private func manualConnectionRow(_ connection: SavedConnection) -> some View {
         let isSelected = connection.id == viewModel.selectedConnectionID
         let configuration = connection.configuration
+        let health = viewModel.healthCheck(for: connection)
 
         HStack(spacing: 12) {
             Button {
@@ -154,6 +155,8 @@ private struct ConnectionsSettingsView: View {
                         Text(configuration.endpointSummary)
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
+
+                        connectionHealthRow(connection, health: health)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -161,6 +164,14 @@ private struct ConnectionsSettingsView: View {
             }
             .buttonStyle(.plain)
             .disabled(!viewModel.canChangeSelection && !isSelected)
+
+            Button {
+                viewModel.refreshConnectionHealth(id: connection.id)
+            } label: {
+                Image(systemName: health.state == .checking ? "hourglass" : "waveform.path.ecg")
+            }
+            .buttonStyle(.borderless)
+            .disabled(viewModel.isRefreshingHealth(for: connection.id))
 
             shareButton(
                 title: connection.configuration.displayName,
@@ -237,6 +248,13 @@ private struct ConnectionsSettingsView: View {
                 .buttonStyle(.borderless)
                 .disabled(viewModel.isRefreshingSubscription(source.id))
 
+                Button {
+                    viewModel.refreshSubscriptionHealth(id: source.id)
+                } label: {
+                    Image(systemName: "waveform.path.ecg")
+                }
+                .buttonStyle(.borderless)
+
                 Button(role: .destructive) {
                     expandedSubscriptionIDs.remove(source.id)
                     viewModel.removeSubscription(id: source.id)
@@ -275,6 +293,7 @@ private struct ConnectionsSettingsView: View {
     private func importedConnectionRow(_ connection: SavedConnection, source: SubscriptionSource) -> some View {
         let isSelected = connection.id == viewModel.selectedConnectionID
         let configuration = connection.configuration
+        let health = viewModel.healthCheck(for: connection)
 
         HStack(spacing: 12) {
             Button {
@@ -303,6 +322,8 @@ private struct ConnectionsSettingsView: View {
                         Text(configuration.endpointSummary)
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
+
+                        connectionHealthRow(connection, health: health)
                     }
 
                     Spacer(minLength: 0)
@@ -312,10 +333,58 @@ private struct ConnectionsSettingsView: View {
             .buttonStyle(.plain)
             .disabled(!viewModel.canChangeSelection && !isSelected)
 
+            Button {
+                viewModel.refreshConnectionHealth(id: connection.id)
+            } label: {
+                Image(systemName: health.state == .checking ? "hourglass" : "waveform.path.ecg")
+            }
+            .buttonStyle(.borderless)
+            .disabled(viewModel.isRefreshingHealth(for: connection.id))
+
             shareButton(
                 title: configuration.displayName,
                 value: configuration.rawLink
             )
+        }
+    }
+
+    @ViewBuilder
+    private func connectionHealthRow(_ connection: SavedConnection, health: ConnectionHealthCheck) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: healthIcon(for: health))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(healthColor(for: health))
+
+            Text(viewModel.healthSummary(for: connection))
+                .font(.caption2)
+                .foregroundStyle(healthColor(for: health))
+                .lineLimit(1)
+        }
+    }
+
+    private func healthIcon(for health: ConnectionHealthCheck) -> String {
+        switch health.state {
+        case .reachable:
+            return "checkmark.circle.fill"
+        case .unreachable:
+            return "xmark.octagon.fill"
+        case .checking:
+            return "arrow.triangle.2.circlepath"
+        case .unknown:
+            return "questionmark.circle"
+        }
+    }
+
+    private func healthColor(for health: ConnectionHealthCheck) -> Color {
+        switch health.state {
+        case .reachable:
+            return Color(NSColor.systemGreen)
+        case .unreachable:
+            return .red
+        case .checking:
+            return .orange
+        case .unknown:
+            return .secondary
         }
     }
 
