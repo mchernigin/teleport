@@ -896,6 +896,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var proxyEndpoint: ProxyEndpoint
     @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
     @Published private(set) var refreshingHealthConnectionIDs: Set<UUID> = []
+    @Published private(set) var queuedHealthConnectionIDs: Set<UUID> = []
     @Published private(set) var menuBarAnimationTime: TimeInterval = 0
 
     private let parser: ConnectionLinkParser
@@ -908,7 +909,8 @@ final class AppViewModel: ObservableObject {
     private let persistenceQueue = DispatchQueue(label: "dev.x.teleport.persistence", qos: .utility)
     private let healthFreshnessTTL: TimeInterval = 30 * 60
     private let automaticHealthProbeLimit = 1
-    private let healthProbeConcurrencyLimit = 1
+    // Bound the background probe pool so bulk refreshes fan out aggressively without spawning unbounded processes.
+    private let healthProbeConcurrencyLimit = 24
     private var autoRefreshTimerCancellable: AnyCancellable?
     private var menuBarAnimationCancellable: AnyCancellable?
     private var pendingHealthProbeIDs: [UUID] = []
@@ -917,6 +919,10 @@ final class AppViewModel: ObservableObject {
     private var pendingHealthProbeResults: [UUID: ConnectionHealthProbeResult] = [:]
     private var applyHealthResultsWorkItem: DispatchWorkItem?
     private var persistWorkItem: DispatchWorkItem?
+    private var savedConnectionsByID: [UUID: SavedConnection] = [:]
+    private var importedConnectionsBySourceID: [UUID: [SavedConnection]] = [:]
+    private var importedConnectionCountsBySourceID: [UUID: Int] = [:]
+    private var subscriptionSourcesByID: [UUID: SubscriptionSource] = [:]
 
     convenience init() {
         self.init(
@@ -962,6 +968,8 @@ final class AppViewModel: ObservableObject {
         }
 
         selectedConnectionID = snapshot.selectedConnectionID
+        rebuildSavedConnectionIndexes()
+        rebuildSubscriptionSourceIndexes()
         normalizeSelection()
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
         startAutoRefreshTimer()
@@ -971,7 +979,7 @@ final class AppViewModel: ObservableObject {
 
     var selectedConnection: SavedConnection? {
         guard let selectedConnectionID else { return savedConnections.first }
-        return savedConnections.first { $0.id == selectedConnectionID } ?? savedConnections.first
+        return savedConnectionsByID[selectedConnectionID] ?? savedConnections.first
     }
 
     var selectedConfiguration: ConnectionConfiguration? {
@@ -1016,20 +1024,16 @@ final class AppViewModel: ObservableObject {
     }
 
     func importedConnections(for sourceID: UUID) -> [SavedConnection] {
-        savedConnections
-            .filter { $0.source?.subscriptionSourceID == sourceID }
-            .sorted { lhs, rhs in
-                lhs.configuration.displayName.localizedCaseInsensitiveCompare(rhs.configuration.displayName) == .orderedAscending
-            }
+        importedConnectionsBySourceID[sourceID] ?? []
     }
 
     func importedConnectionCount(for sourceID: UUID) -> Int {
-        importedConnections(for: sourceID).count
+        importedConnectionCountsBySourceID[sourceID] ?? 0
     }
 
     func subscriptionSource(for connection: SavedConnection) -> SubscriptionSource? {
         guard let sourceID = connection.source?.subscriptionSourceID else { return nil }
-        return subscriptionSources.first { $0.id == sourceID }
+        return subscriptionSourcesByID[sourceID]
     }
 
     func isRefreshingSubscription(_ sourceID: UUID) -> Bool {
@@ -1040,11 +1044,21 @@ final class AppViewModel: ObservableObject {
         refreshingHealthConnectionIDs.contains(connectionID)
     }
 
+    func isQueuedHealth(for connectionID: UUID) -> Bool {
+        queuedHealthConnectionIDs.contains(connectionID)
+    }
+
     func healthCheck(for connection: SavedConnection) -> ConnectionHealthCheck {
         if refreshingHealthConnectionIDs.contains(connection.id) {
             var checking = connection.healthCheck ?? .unknown
             checking.state = .checking
             return checking
+        }
+
+        if queuedHealthConnectionIDs.contains(connection.id) {
+            var queued = connection.healthCheck ?? .unknown
+            queued.state = .queued
+            return queued
         }
 
         guard let healthCheck = connection.healthCheck else {
@@ -1074,6 +1088,8 @@ final class AppViewModel: ObservableObject {
             return "Available"
         case .unreachable:
             return healthCheck.failureSummary ?? "Unavailable"
+        case .queued:
+            return "Queued…"
         case .checking:
             return "Checking…"
         case .unknown:
@@ -1121,6 +1137,7 @@ final class AppViewModel: ObservableObject {
         }
 
         let removedConnection = savedConnections.remove(at: index)
+        rebuildSavedConnectionIndexes()
         cancelHealthProbe(id: id)
         if selectedConnectionID == removedConnection.id {
             recoverSelection(afterRemovingConnectionAt: index)
@@ -1143,6 +1160,8 @@ final class AppViewModel: ObservableObject {
 
         savedConnections.removeAll { $0.source?.subscriptionSourceID == id }
         subscriptionSources.removeAll { $0.id == id }
+        rebuildSavedConnectionIndexes()
+        rebuildSubscriptionSourceIndexes()
         refreshingSubscriptionIDs.remove(id)
         let removedIDs = Set(affectedConnections.map(\.id))
         cancelHealthProbes(ids: removedIDs)
@@ -1197,6 +1216,7 @@ final class AppViewModel: ObservableObject {
 
             if urlChanged {
                 savedConnections.removeAll { $0.source?.subscriptionSourceID == id }
+                rebuildSavedConnectionIndexes()
                 if selectedConnection?.source?.subscriptionSourceID == id {
                     normalizeSelection()
                 }
@@ -1306,6 +1326,7 @@ final class AppViewModel: ObservableObject {
             let configuration = try parser.parse(rawLink)
             let savedConnection = SavedConnection(id: UUID(), configuration: configuration, savedAt: Date(), source: nil)
             savedConnections.append(savedConnection)
+            rebuildSavedConnectionIndexes()
             selectedConnectionID = savedConnection.id
             connectionPhase = .stopped
             lastError = nil
@@ -1340,6 +1361,7 @@ final class AppViewModel: ObservableObject {
             )
 
             subscriptionSources.append(source)
+            rebuildSubscriptionSourceIndexes()
             lastError = nil
             persistSettingError()
             refreshSubscription(id: source.id, autoSelectFirstImported: savedConnections.isEmpty)
@@ -1459,6 +1481,7 @@ final class AppViewModel: ObservableObject {
         )
 
         savedConnections = replacementResult.savedConnections
+        rebuildSavedConnectionIndexes()
         selectedConnectionID = replacementResult.selectedConnectionID
 
         updateSubscriptionSource(sourceID) {
@@ -1560,18 +1583,26 @@ final class AppViewModel: ObservableObject {
     private func enqueueHealthProbes(for ids: [UUID], force: Bool, priority: Bool) {
         guard !ids.isEmpty else { return }
 
+        var prioritizedIDs: [UUID] = []
+
         for id in ids {
-            guard let connection = savedConnections.first(where: { $0.id == id }) else { continue }
+            guard let connection = savedConnectionsByID[id] else { continue }
             guard force || needsHealthRefresh(for: connection) else { continue }
             guard activeHealthProbeTasks[id] == nil else { continue }
             guard !pendingHealthProbeIDSet.contains(id) else { continue }
 
             if priority {
-                pendingHealthProbeIDs.insert(id, at: 0)
+                prioritizedIDs.append(id)
             } else {
                 pendingHealthProbeIDs.append(id)
             }
             pendingHealthProbeIDSet.insert(id)
+        }
+
+        queuedHealthConnectionIDs = pendingHealthProbeIDSet
+
+        if priority, !prioritizedIDs.isEmpty {
+            pendingHealthProbeIDs.insert(contentsOf: prioritizedIDs, at: 0)
         }
 
         drainHealthProbeQueue()
@@ -1582,8 +1613,9 @@ final class AppViewModel: ObservableObject {
               let nextID = pendingHealthProbeIDs.first {
             pendingHealthProbeIDs.removeFirst()
             pendingHealthProbeIDSet.remove(nextID)
+            queuedHealthConnectionIDs = pendingHealthProbeIDSet
 
-            guard let connection = savedConnections.first(where: { $0.id == nextID }) else {
+            guard let connection = savedConnectionsByID[nextID] else {
                 continue
             }
 
@@ -1640,6 +1672,7 @@ final class AppViewModel: ObservableObject {
             )
         }
 
+        rebuildSavedConnectionIndexes()
         schedulePersist()
     }
 
@@ -1648,6 +1681,7 @@ final class AppViewModel: ObservableObject {
         activeHealthProbeTasks[id] = nil
         refreshingHealthConnectionIDs.remove(id)
         pendingHealthProbeIDSet.remove(id)
+        queuedHealthConnectionIDs = pendingHealthProbeIDSet
         pendingHealthProbeIDs.removeAll { $0 == id }
     }
 
@@ -1661,6 +1695,30 @@ final class AppViewModel: ObservableObject {
     private func updateSubscriptionSource(_ id: UUID, mutate: (inout SubscriptionSource) -> Void) {
         guard let index = subscriptionSources.firstIndex(where: { $0.id == id }) else { return }
         mutate(&subscriptionSources[index])
+        subscriptionSourcesByID[id] = subscriptionSources[index]
+    }
+
+    private func rebuildSavedConnectionIndexes() {
+        savedConnectionsByID = Dictionary(uniqueKeysWithValues: savedConnections.map { ($0.id, $0) })
+
+        let groupedImportedConnections = Dictionary(grouping: savedConnections) { connection in
+            connection.source?.subscriptionSourceID
+        }
+
+        importedConnectionsBySourceID = groupedImportedConnections.reduce(into: [:]) { partialResult, item in
+            guard let sourceID = item.key else { return }
+            partialResult[sourceID] = item.value.sorted {
+                $0.configuration.displayName.localizedCaseInsensitiveCompare($1.configuration.displayName) == .orderedAscending
+            }
+        }
+
+        importedConnectionCountsBySourceID = importedConnectionsBySourceID.reduce(into: [:]) { partialResult, item in
+            partialResult[item.key] = item.value.count
+        }
+    }
+
+    private func rebuildSubscriptionSourceIndexes() {
+        subscriptionSourcesByID = Dictionary(uniqueKeysWithValues: subscriptionSources.map { ($0.id, $0) })
     }
 
     private func recoverSelection(afterRemovingConnectionAt index: Int) {

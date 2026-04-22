@@ -20,6 +20,7 @@ enum ProxyPhase: String, Codable {
 
 enum ConnectionHealthState: String, Codable {
     case unknown
+    case queued
     case checking
     case reachable
     case unreachable
@@ -45,7 +46,7 @@ struct ConnectionHealthCheck: Codable, Equatable {
     )
 
     var normalizedForPersistence: ConnectionHealthCheck {
-        guard state == .checking else { return self }
+        guard state == .queued || state == .checking else { return self }
         return ConnectionHealthCheck(
             state: checkedAt == nil ? .unknown : .unknown,
             checkedAt: checkedAt,
@@ -55,7 +56,7 @@ struct ConnectionHealthCheck: Codable, Equatable {
     }
 
     func freshness(now: Date, ttl: TimeInterval) -> ConnectionHealthFreshness {
-        guard state != .unknown else {
+        guard state != .unknown && state != .queued && state != .checking else {
             return .unknown
         }
 

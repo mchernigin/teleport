@@ -63,7 +63,11 @@ private struct ConnectionsSettingsView: View {
                                 .foregroundStyle(.secondary)
                         } else {
                             ForEach(viewModel.subscriptionSources) { source in
-                                subscriptionSection(source)
+                                subscriptionHeaderRow(source)
+
+                                if expandedSubscriptionIDs.contains(source.id) {
+                                    subscriptionExpandedRows(source)
+                                }
                             }
                         }
                     }
@@ -140,23 +144,18 @@ private struct ConnectionsSettingsView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(configuration.displayName)
                                 .foregroundStyle(.primary)
-
-                            if let warning = configuration.securityWarningText {
-                                Label(warning, systemImage: "exclamationmark.shield.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(.orange)
-                            }
+                            connectionHealthRow(connection, health: health)
                         }
 
-                        Text(configuration.descriptiveSummary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(configuration.descriptiveSummary)
+                                .font(.caption)
+                                .foregroundStyle(configuration.securityWarningText == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+                        }
 
                         Text(configuration.endpointSummary)
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
-
-                        connectionHealthRow(connection, health: health)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -168,10 +167,10 @@ private struct ConnectionsSettingsView: View {
             Button {
                 viewModel.refreshConnectionHealth(id: connection.id)
             } label: {
-                Image(systemName: health.state == .checking ? "hourglass" : "waveform.path.ecg")
+                Image(systemName: healthActionIcon(for: health))
             }
             .buttonStyle(.borderless)
-            .disabled(viewModel.isRefreshingHealth(for: connection.id))
+            .disabled(viewModel.isRefreshingHealth(for: connection.id) || viewModel.isQueuedHealth(for: connection.id))
 
             shareButton(
                 title: connection.configuration.displayName,
@@ -190,107 +189,105 @@ private struct ConnectionsSettingsView: View {
     }
 
     @ViewBuilder
-    private func subscriptionSection(_ source: SubscriptionSource) -> some View {
+    private func subscriptionHeaderRow(_ source: SubscriptionSource) -> some View {
         let isExpanded = expandedSubscriptionIDs.contains(source.id)
-        let importedConnections = viewModel.importedConnections(for: source.id)
 
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                Button {
-                    toggleSubscription(source.id)
-                } label: {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 12)
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 6) {
-                                Text(source.displayName)
-                                    .font(.subheadline.weight(.semibold))
-
-                                if viewModel.isRefreshingSubscription(source.id) {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                }
-                            }
-
-                            Text(subscriptionSummary(for: source))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                Spacer(minLength: 12)
-
-                shareButton(
-                    title: source.displayName,
-                    value: source.urlString
-                )
-
-                Button {
-                    editingSubscription = source
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .buttonStyle(.borderless)
-
-                Button {
-                    viewModel.refreshSubscription(id: source.id)
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(viewModel.isRefreshingSubscription(source.id))
-
-                Button {
-                    viewModel.refreshSubscriptionHealth(id: source.id)
-                } label: {
-                    Image(systemName: "waveform.path.ecg")
-                }
-                .buttonStyle(.borderless)
-
-                Button(role: .destructive) {
-                    expandedSubscriptionIDs.remove(source.id)
-                    viewModel.removeSubscription(id: source.id)
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-            }
-
-            if let error = source.lastError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            if isExpanded {
-                if importedConnections.isEmpty {
-                    Text("No imported configs yet")
-                        .font(.caption)
+        HStack(alignment: .top, spacing: 10) {
+            Button {
+                toggleSubscription(source.id)
+            } label: {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .padding(.leading, 20)
-                } else {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(importedConnections) { connection in
-                            importedConnectionRow(connection, source: source)
+                        .frame(width: 12)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(source.displayName)
+                                .font(.subheadline.weight(.semibold))
+
+                            if viewModel.isRefreshingSubscription(source.id) {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
                         }
+
+                        Text(subscriptionSummary(for: source))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.leading, 20)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 12)
+
+            shareButton(
+                title: source.displayName,
+                value: source.urlString
+            )
+
+            Button {
+                editingSubscription = source
+            } label: {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.borderless)
+
+            Button {
+                viewModel.refreshSubscription(id: source.id)
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .disabled(viewModel.isRefreshingSubscription(source.id))
+
+            Button {
+                viewModel.refreshSubscriptionHealth(id: source.id)
+            } label: {
+                Image(systemName: "waveform.path.ecg")
+            }
+            .buttonStyle(.borderless)
+
+            Button(role: .destructive) {
+                expandedSubscriptionIDs.remove(source.id)
+                viewModel.removeSubscription(id: source.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
         }
         .padding(.vertical, 6)
     }
 
     @ViewBuilder
-    private func importedConnectionRow(_ connection: SavedConnection, source: SubscriptionSource) -> some View {
+    private func subscriptionExpandedRows(_ source: SubscriptionSource) -> some View {
+        if let error = source.lastError {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .padding(.leading, 20)
+        }
+
+        let importedConnections = viewModel.importedConnections(for: source.id)
+        if importedConnections.isEmpty {
+            Text("No imported configs yet")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 20)
+        } else {
+            ForEach(importedConnections) { connection in
+                importedConnectionRow(connection)
+                    .padding(.leading, 20)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func importedConnectionRow(_ connection: SavedConnection) -> some View {
         let isSelected = connection.id == viewModel.selectedConnectionID
         let configuration = connection.configuration
         let health = viewModel.healthCheck(for: connection)
@@ -307,28 +304,22 @@ private struct ConnectionsSettingsView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(configuration.displayName)
                                 .foregroundStyle(.primary)
-
-                            if let warning = configuration.securityWarningText {
-                                Label(warning, systemImage: "exclamationmark.shield.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(.orange)
-                            }
+                            connectionHealthRow(connection, health: health)
                         }
 
-                        Text(configuration.descriptiveSummary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(configuration.descriptiveSummary)
+                                .font(.caption)
+                                .foregroundStyle(configuration.securityWarningText == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+                        }
 
                         Text(configuration.endpointSummary)
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
-
-                        connectionHealthRow(connection, health: health)
                     }
 
                     Spacer(minLength: 0)
                 }
-                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(!viewModel.canChangeSelection && !isSelected)
@@ -336,27 +327,28 @@ private struct ConnectionsSettingsView: View {
             Button {
                 viewModel.refreshConnectionHealth(id: connection.id)
             } label: {
-                Image(systemName: health.state == .checking ? "hourglass" : "waveform.path.ecg")
+                Image(systemName: healthActionIcon(for: health))
             }
             .buttonStyle(.borderless)
-            .disabled(viewModel.isRefreshingHealth(for: connection.id))
+            .disabled(viewModel.isRefreshingHealth(for: connection.id) || viewModel.isQueuedHealth(for: connection.id))
 
             shareButton(
                 title: configuration.displayName,
                 value: configuration.rawLink
             )
         }
+        .padding(.vertical, 6)
     }
 
     @ViewBuilder
     private func connectionHealthRow(_ connection: SavedConnection, health: ConnectionHealthCheck) -> some View {
         HStack(spacing: 6) {
             Image(systemName: healthIcon(for: health))
-                .font(.caption2.weight(.semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(healthColor(for: health))
 
             Text(viewModel.healthSummary(for: connection))
-                .font(.caption2)
+                .font(.body)
                 .foregroundStyle(healthColor(for: health))
                 .lineLimit(1)
         }
@@ -368,6 +360,8 @@ private struct ConnectionsSettingsView: View {
             return "checkmark.circle.fill"
         case .unreachable:
             return "xmark.octagon.fill"
+        case .queued:
+            return "clock.badge"
         case .checking:
             return "arrow.triangle.2.circlepath"
         case .unknown:
@@ -381,10 +375,23 @@ private struct ConnectionsSettingsView: View {
             return Color(NSColor.systemGreen)
         case .unreachable:
             return .red
+        case .queued:
+            return .secondary
         case .checking:
             return .orange
         case .unknown:
             return .secondary
+        }
+    }
+
+    private func healthActionIcon(for health: ConnectionHealthCheck) -> String {
+        switch health.state {
+        case .queued:
+            return "clock.badge"
+        case .checking:
+            return "hourglass"
+        case .unknown, .reachable, .unreachable:
+            return "waveform.path.ecg"
         }
     }
 
