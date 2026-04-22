@@ -1,6 +1,9 @@
 import AppKit
+import CFNetwork
 import Combine
+import Darwin
 import Foundation
+import Network
 import SystemConfiguration
 
 struct ConnectionLinkParser {
@@ -409,11 +412,20 @@ struct XrayConfigurationWriter {
             .appendingPathComponent("teleport", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let output = directory.appendingPathComponent("xray-config.json")
+        return try writeConfig(
+            for: configuration,
+            to: directory.appendingPathComponent("xray-config.json")
+        )
+    }
+
+    func writeConfig(for configuration: ConnectionConfiguration, to outputURL: URL) throws -> URL {
+        let directory = outputURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
         let payload = makePayload(configuration: configuration)
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: output, options: .atomic)
-        return output
+        try data.write(to: outputURL, options: .atomic)
+        return outputURL
     }
 
     private func makePayload(configuration: ConnectionConfiguration) -> [String: Any] {
@@ -570,6 +582,8 @@ final class XrayRuntimeManager: @unchecked Sendable {
     private var process: Process?
     private var errorPipe: Pipe?
     private let bundle: Bundle
+    private let errorBufferLock = NSLock()
+    private var errorBuffer = Data()
 
     init(bundle: Bundle = .main) {
         self.bundle = bundle
@@ -599,6 +613,18 @@ final class XrayRuntimeManager: @unchecked Sendable {
         process.environment = environment
 
         let pipe = Pipe()
+        errorBufferLock.lock()
+        errorBuffer = Data()
+        errorBufferLock.unlock()
+
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard let self, !data.isEmpty else { return }
+            self.errorBufferLock.lock()
+            self.errorBuffer.append(data)
+            self.errorBufferLock.unlock()
+        }
+
         process.standardError = pipe
         process.standardOutput = Pipe()
         errorPipe = pipe
@@ -608,16 +634,45 @@ final class XrayRuntimeManager: @unchecked Sendable {
     }
 
     func stop() {
-        process?.terminate()
-        process = nil
-        errorPipe = nil
+        guard let process else {
+            cleanupPipe()
+            return
+        }
+
+        if process.isRunning {
+            process.terminate()
+
+            let deadline = Date().addingTimeInterval(1)
+            while process.isRunning && Date() < deadline {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+            }
+
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+
+            process.waitUntilExit()
+        }
+
+        self.process = nil
+        cleanupPipe()
+    }
+
+    func stopAndCaptureErrorOutput() -> String? {
+        stop()
+        return capturedErrorOutput()
     }
 
     func capturedErrorOutput() -> String? {
-        guard let pipe = errorPipe else { return nil }
-        let data = pipe.fileHandleForReading.availableData
-        guard !data.isEmpty else { return nil }
-        return String(data: data, encoding: .utf8)
+        errorBufferLock.lock()
+        defer { errorBufferLock.unlock() }
+        guard !errorBuffer.isEmpty else { return nil }
+        return String(data: errorBuffer, encoding: .utf8)
+    }
+
+    private func cleanupPipe() {
+        errorPipe?.fileHandleForReading.readabilityHandler = nil
+        errorPipe = nil
     }
 
     private func assetDirectoryURL() -> URL? {
@@ -736,22 +791,32 @@ struct ConnectionHealthProbeResult {
     let state: ConnectionHealthState
     let checkedAt: Date
     let latencyMilliseconds: Int?
+    let latencyKind: ConnectionHealthLatencyKind?
     let failureSummary: String?
 }
 
 final class ConnectionHealthProbeService: @unchecked Sendable {
     private let attemptCount: Int
     private let tcpTimeoutSeconds: Int
-    private let pingTimeoutMilliseconds: Int
+    private let tunnelProbeTimeoutSeconds: Int
+    private let tunnelProbeURL: URL
+    private let bundle: Bundle
+    private let fileManager: FileManager
 
     init(
-        attemptCount: Int = 3,
+        attemptCount: Int = 4,
         tcpTimeoutSeconds: Int = 3,
-        pingTimeoutMilliseconds: Int = 1000
+        tunnelProbeTimeoutSeconds: Int = 8,
+        tunnelProbeURL: URL = URL(string: "https://cp.cloudflare.com/generate_204")!,
+        bundle: Bundle = .main,
+        fileManager: FileManager = .default
     ) {
         self.attemptCount = max(1, attemptCount)
         self.tcpTimeoutSeconds = max(1, tcpTimeoutSeconds)
-        self.pingTimeoutMilliseconds = max(100, pingTimeoutMilliseconds)
+        self.tunnelProbeTimeoutSeconds = max(2, tunnelProbeTimeoutSeconds)
+        self.tunnelProbeURL = tunnelProbeURL
+        self.bundle = bundle
+        self.fileManager = fileManager
     }
 
     func probe(_ connection: SavedConnection) async -> ConnectionHealthProbeResult {
@@ -760,128 +825,343 @@ final class ConnectionHealthProbeService: @unchecked Sendable {
                 state: .unreachable,
                 checkedAt: Date(),
                 latencyMilliseconds: nil,
+                latencyKind: nil,
                 failureSummary: "Invalid port"
             )
         }
 
         let checkedAt = Date()
-        let availabilityResult = await tcpAvailabilityCheck(connection)
+        let tunnelResult = await proxyLatencyCheck(connection)
 
-        guard availabilityResult.isReachable else {
-            return ConnectionHealthProbeResult(
-                state: .unreachable,
-                checkedAt: checkedAt,
-                latencyMilliseconds: nil,
-                failureSummary: availabilityResult.failureSummary ?? "Unavailable"
-            )
-        }
-
-        let pingLatencies = await pingSamples(host: connection.configuration.host)
-        if !pingLatencies.isEmpty {
+        if let tunnelLatency = tunnelResult.latencyMilliseconds {
             return ConnectionHealthProbeResult(
                 state: .reachable,
                 checkedAt: checkedAt,
-                latencyMilliseconds: Self.median(pingLatencies),
+                latencyMilliseconds: tunnelLatency,
+                latencyKind: .proxyRequest,
                 failureSummary: nil
             )
         }
 
         return ConnectionHealthProbeResult(
-            state: .reachable,
+            state: .unreachable,
             checkedAt: checkedAt,
             latencyMilliseconds: nil,
-            failureSummary: nil
+            latencyKind: nil,
+            failureSummary: tunnelResult.failureSummary ?? "Unavailable"
         )
     }
 
-    private func tcpAvailabilityCheck(_ connection: SavedConnection) async -> (isReachable: Bool, failureSummary: String?) {
+    private func tcpAvailabilityCheck(_ connection: SavedConnection) async -> (isReachable: Bool, latencyMilliseconds: Int?, failureSummary: String?) {
+        guard let rawPort = UInt16(exactly: connection.configuration.port),
+              let port = NWEndpoint.Port(rawValue: rawPort) else {
+            return (false, nil, "Invalid port")
+        }
+
+        let host = NWEndpoint.Host(connection.configuration.host)
+        var successfulLatencies: [Int] = []
+        var lastFailureSummary: String?
+
+        for _ in 0..<attemptCount {
+            let sample = await tcpLatencySample(host: host, port: port, connectionID: connection.id)
+            if sample.isReachable, let latency = sample.latencyMilliseconds {
+                successfulLatencies.append(latency)
+            } else {
+                lastFailureSummary = sample.failureSummary
+            }
+        }
+
+        guard !successfulLatencies.isEmpty else {
+            return (false, nil, lastFailureSummary ?? "Unavailable")
+        }
+
+        return (true, Self.bestObservedLatency(successfulLatencies), nil)
+    }
+
+    private func proxyLatencyCheck(_ connection: SavedConnection) async -> (latencyMilliseconds: Int?, failureSummary: String?) {
+        let probeEndpoint = temporaryProbeEndpoint()
+        let runtimeManager = XrayRuntimeManager(bundle: bundle)
+        let writer = XrayConfigurationWriter(proxyEndpoint: probeEndpoint)
+        let probeDirectory = fileManager.temporaryDirectory.appendingPathComponent("teleport-health-\(connection.id.uuidString)-\(UUID().uuidString)", isDirectory: true)
+        let configURL = probeDirectory.appendingPathComponent("xray-config.json")
+
+        defer {
+            try? fileManager.removeItem(at: probeDirectory)
+        }
+
         do {
-            let result = try await runCommand(
-                executable: "/usr/bin/nc",
-                arguments: ["-z", "-G", String(tcpTimeoutSeconds), connection.configuration.host, String(connection.configuration.port)]
-            )
-            return (result.terminationStatus == 0, result.terminationStatus == 0 ? nil : summarizedNetcatFailure(result.standardError))
+            _ = try writer.writeConfig(for: connection.configuration, to: configURL)
+            try runtimeManager.start(configURL: configURL)
+            let isReady = await waitForLocalProxyReady(endpoint: probeEndpoint, connectionID: connection.id)
+            guard isReady else {
+                let runtimeError = runtimeManager.stopAndCaptureErrorOutput()?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (nil, runtimeError.map(Self.summarizedRuntimeFailure) ?? "Proxy startup timed out")
+            }
+
+            let requestResult = try await proxyRequestLatencySample(endpoint: probeEndpoint)
+            runtimeManager.stop()
+            return (requestResult, nil)
         } catch {
-            return (false, error.localizedDescription)
+            let runtimeError = runtimeManager.stopAndCaptureErrorOutput()?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let runtimeError, !runtimeError.isEmpty {
+                return (nil, Self.summarizedRuntimeFailure(runtimeError))
+            }
+            return (nil, Self.summarizedProbeFailure(error))
         }
     }
 
-    private func pingSamples(host: String) async -> [Int] {
-        do {
-            let result = try await runCommand(
-                executable: "/sbin/ping",
-                arguments: ["-c", String(attemptCount), "-W", String(pingTimeoutMilliseconds), host]
-            )
-            guard result.terminationStatus == 0 || result.terminationStatus == 2 else {
-                return []
-            }
-            return parsePingLatencies(result.standardOutput)
-        } catch {
-            return []
+    private func proxyRequestLatencySample(endpoint: ProxyEndpoint) async throws -> Int {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = TimeInterval(tunnelProbeTimeoutSeconds)
+        configuration.timeoutIntervalForResource = TimeInterval(tunnelProbeTimeoutSeconds)
+        configuration.waitsForConnectivity = false
+        configuration.connectionProxyDictionary = [
+            kCFNetworkProxiesHTTPEnable as String: 1,
+            kCFNetworkProxiesHTTPProxy as String: endpoint.host,
+            kCFNetworkProxiesHTTPPort as String: endpoint.httpPort,
+            kCFNetworkProxiesHTTPSEnable as String: 1,
+            kCFNetworkProxiesHTTPSProxy as String: endpoint.host,
+            kCFNetworkProxiesHTTPSPort as String: endpoint.httpPort
+        ]
+
+        let session = URLSession(configuration: configuration)
+        defer {
+            session.invalidateAndCancel()
         }
-    }
 
-    private func runCommand(executable: String, arguments: [String]) async throws -> (terminationStatus: Int32, standardOutput: String, standardError: String) {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
+        let probeCandidates = [
+            tunnelProbeURL,
+            URL(string: "https://www.gstatic.com/generate_204")!,
+            URL(string: "https://www.google.com/generate_204")!
+        ]
 
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
+        var lastError: Error?
 
-            process.terminationHandler = { process in
-                let stdout = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                let stderr = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                continuation.resume(returning: (process.terminationStatus, stdout, stderr))
-            }
-
+        for probeURL in probeCandidates {
             do {
-                try process.run()
+                var request = URLRequest(url: probeURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: TimeInterval(tunnelProbeTimeoutSeconds))
+                request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+                request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+
+                let startTime = DispatchTime.now().uptimeNanoseconds
+                let (_, response) = try await session.data(for: request)
+                let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds - startTime
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw ProbeError.invalidResponse
+                }
+
+                guard (200 ... 399).contains(httpResponse.statusCode) else {
+                    throw ProbeError.httpStatus(httpResponse.statusCode)
+                }
+
+                return max(1, Int((Double(elapsedNanoseconds) / 1_000_000).rounded()))
             } catch {
-                continuation.resume(throwing: error)
+                lastError = error
+            }
+        }
+
+        throw lastError ?? ProbeError.invalidResponse
+    }
+
+    private func waitForLocalProxyReady(endpoint: ProxyEndpoint, connectionID: UUID) async -> Bool {
+        guard let port = NWEndpoint.Port(rawValue: UInt16(endpoint.httpPort)) else {
+            return false
+        }
+
+        let host = NWEndpoint.Host(endpoint.host)
+        let attemptLimit = 20
+
+        for _ in 0..<attemptLimit {
+            let sample = await tcpLatencySample(host: host, port: port, connectionID: connectionID)
+            if sample.isReachable {
+                return true
+            }
+
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+
+        return false
+    }
+
+    private func temporaryProbeEndpoint() -> ProxyEndpoint {
+        let basePort = Int.random(in: 20000 ... 45000)
+        return ProxyEndpoint(host: "127.0.0.1", httpPort: basePort, socksPort: basePort + 1)
+    }
+
+    private func tcpLatencySample(host: NWEndpoint.Host, port: NWEndpoint.Port, connectionID: UUID) async -> (isReachable: Bool, latencyMilliseconds: Int?, failureSummary: String?) {
+        let startTime = DispatchTime.now().uptimeNanoseconds
+
+        return await withCheckedContinuation { continuation in
+            final class ResumeState: @unchecked Sendable {
+                let lock = NSLock()
+                var didResume = false
+            }
+
+            let resumeState = ResumeState()
+            let queue = DispatchQueue(label: "dev.x.teleport.health-probe.\(connectionID.uuidString)", qos: .utility)
+            let nwConnection = NWConnection(host: host, port: port, using: .tcp)
+
+            @Sendable func finish(isReachable: Bool, latencyMilliseconds: Int?, failureSummary: String?) {
+                resumeState.lock.lock()
+                defer { resumeState.lock.unlock() }
+                guard !resumeState.didResume else { return }
+                resumeState.didResume = true
+                nwConnection.cancel()
+                continuation.resume(returning: (isReachable, latencyMilliseconds, failureSummary))
+            }
+
+            nwConnection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds - startTime
+                    let latency = max(1, Int((Double(elapsedNanoseconds) / 1_000_000).rounded()))
+                    finish(isReachable: true, latencyMilliseconds: latency, failureSummary: nil)
+                case .failed(let error):
+                    finish(isReachable: false, latencyMilliseconds: nil, failureSummary: Self.summarizedConnectionFailure(error))
+                default:
+                    break
+                }
+            }
+
+            nwConnection.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + .seconds(tcpTimeoutSeconds)) {
+                finish(isReachable: false, latencyMilliseconds: nil, failureSummary: "Timed out")
             }
         }
     }
 
-    private func parsePingLatencies(_ output: String) -> [Int] {
-        output
-            .split(separator: "\n")
-            .compactMap { line -> Int? in
-                guard let range = line.range(of: "time=") else { return nil }
-                let suffix = line[range.upperBound...]
-                let value = suffix.prefix { $0.isNumber || $0 == "." }
-                guard let milliseconds = Double(value) else { return nil }
-                return Int(milliseconds.rounded())
+    private nonisolated static func summarizedConnectionFailure(_ error: NWError) -> String {
+        switch error {
+        case .dns:
+            return "DNS resolution failed"
+        case .posix(let code):
+            if code == .ECONNREFUSED {
+                return "Connection refused"
             }
+            if code == .ETIMEDOUT {
+                return "Timed out"
+            }
+            let message = String(describing: code).trimmingCharacters(in: .whitespacesAndNewlines)
+            return message.isEmpty ? "TCP probe failed" : message
+        default:
+            let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            if message.localizedCaseInsensitiveContains("timed out") {
+                return "Timed out"
+            }
+            return message.isEmpty ? "TCP probe failed" : message
+        }
     }
 
-    private func summarizedNetcatFailure(_ standardError: String) -> String {
-        let trimmed = standardError.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return "TCP probe failed"
+    private nonisolated static func bestObservedLatency(_ values: [Int]) -> Int {
+        values.min() ?? 0
+    }
+
+    private nonisolated static func summarizedProbeFailure(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            return summarizedURLErrorCode(urlError.code)
         }
-        if trimmed.localizedCaseInsensitiveContains("timed out") {
+
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            return summarizedURLErrorCode(URLError.Code(rawValue: nsError.code))
+        }
+
+        if nsError.domain == kCFErrorDomainCFNetwork as String {
+            return "Network error"
+        }
+
+        if let probeError = error as? ProbeError {
+            switch probeError {
+            case .invalidResponse:
+                return "Invalid probe response"
+            case .httpStatus(let statusCode):
+                if statusCode == 401 || statusCode == 403 {
+                    return "Probe blocked"
+                }
+                if (500 ... 599).contains(statusCode) {
+                    return "Server error"
+                }
+                return "Probe request failed"
+            }
+        }
+
+        return summarizedRuntimeFailure(error.localizedDescription)
+    }
+
+    private nonisolated static func summarizedRuntimeFailure(_ message: String) -> String {
+        let firstLine = message
+            .split(whereSeparator: { $0.isNewline })
+            .map(String.init)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+
+        if firstLine.contains("timed out") {
             return "Timed out"
         }
-        if trimmed.localizedCaseInsensitiveContains("refused") {
-            return "Connection refused"
+        if firstLine.contains("tls") || firstLine.contains("certificate") || firstLine.contains("ssl") {
+            return "TLS handshake failed"
         }
-        if trimmed.localizedCaseInsensitiveContains("nodename nor servname provided") {
+        if firstLine.contains("dns") || firstLine.contains("no such host") {
             return "DNS resolution failed"
         }
-        return trimmed
+        if firstLine.contains("refused") {
+            return "Connection refused"
+        }
+        if firstLine.contains("network") {
+            return "Network error"
+        }
+        if firstLine.contains("forbidden") || firstLine.contains("blocked") {
+            return "Probe blocked"
+        }
+        if firstLine.contains("invalid") {
+            return "Invalid probe response"
+        }
+
+        return "Probe failed"
     }
 
-    private static func median(_ values: [Int]) -> Int {
-        let sorted = values.sorted()
-        let middle = sorted.count / 2
-        if sorted.count.isMultiple(of: 2) {
-            return Int(((Double(sorted[middle - 1]) + Double(sorted[middle])) / 2.0).rounded())
+    private nonisolated static func summarizedURLErrorCode(_ code: URLError.Code) -> String {
+        switch code {
+        case .unknown:
+            return "Network error"
+        default:
+            break
         }
-        return sorted[middle]
+
+        switch code {
+        case .appTransportSecurityRequiresSecureConnection:
+            return "Probe blocked"
+        case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateHasUnknownRoot, .clientCertificateRejected, .clientCertificateRequired:
+            return "TLS handshake failed"
+        case .timedOut:
+            return "Timed out"
+        case .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet, .internationalRoamingOff, .callIsActive, .dataNotAllowed:
+            return "Network error"
+        case .cannotFindHost, .dnsLookupFailed:
+            return "DNS resolution failed"
+        case .badServerResponse:
+            return "Bad server response"
+        case .userAuthenticationRequired, .userCancelledAuthentication, .noPermissionsToReadFile:
+            return "Probe blocked"
+        default:
+            return "Probe failed"
+        }
+    }
+
+    enum ProbeError: LocalizedError {
+        case invalidResponse
+        case httpStatus(Int)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidResponse:
+                return "Probe returned an invalid response"
+            case .httpStatus(let statusCode):
+                return "Probe request failed with status \(statusCode)"
+            }
+        }
     }
 }
 
@@ -909,8 +1189,8 @@ final class AppViewModel: ObservableObject {
     private let persistenceQueue = DispatchQueue(label: "dev.x.teleport.persistence", qos: .utility)
     private let healthFreshnessTTL: TimeInterval = 30 * 60
     private let automaticHealthProbeLimit = 1
-    // Bound the background probe pool so bulk refreshes fan out aggressively without spawning unbounded processes.
-    private let healthProbeConcurrencyLimit = 24
+    // Full tunnel probes spin up temporary Xray instances; allow a wider fan-out for bulk checks.
+    private let healthProbeConcurrencyLimit = 10
     private var autoRefreshTimerCancellable: AnyCancellable?
     private var menuBarAnimationCancellable: AnyCancellable?
     private var pendingHealthProbeIDs: [UUID] = []
@@ -1083,7 +1363,12 @@ final class AppViewModel: ObservableObject {
         switch healthCheck.state {
         case .reachable:
             if let latency = healthCheck.latencyMilliseconds {
-                return "Latency \(latency) ms"
+                switch healthCheck.latencyKind {
+                case .proxyRequest:
+                    return "Ping \(latency) ms"
+                case .tcpConnect, nil:
+                    return "TCP \(latency) ms"
+                }
             }
             return "Available"
         case .unreachable:
@@ -1668,6 +1953,7 @@ final class AppViewModel: ObservableObject {
                 state: result.state,
                 checkedAt: result.checkedAt,
                 latencyMilliseconds: result.latencyMilliseconds,
+                latencyKind: result.latencyKind,
                 failureSummary: result.failureSummary
             )
         }

@@ -32,16 +32,23 @@ enum ConnectionHealthFreshness {
     case unknown
 }
 
+enum ConnectionHealthLatencyKind: String, Codable {
+    case tcpConnect
+    case proxyRequest
+}
+
 struct ConnectionHealthCheck: Codable, Equatable {
     var state: ConnectionHealthState
     var checkedAt: Date?
     var latencyMilliseconds: Int?
+    var latencyKind: ConnectionHealthLatencyKind?
     var failureSummary: String?
 
     static let unknown = ConnectionHealthCheck(
         state: .unknown,
         checkedAt: nil,
         latencyMilliseconds: nil,
+        latencyKind: nil,
         failureSummary: nil
     )
 
@@ -51,6 +58,7 @@ struct ConnectionHealthCheck: Codable, Equatable {
             state: checkedAt == nil ? .unknown : .unknown,
             checkedAt: checkedAt,
             latencyMilliseconds: latencyMilliseconds,
+            latencyKind: latencyKind,
             failureSummary: failureSummary
         )
     }

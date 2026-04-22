@@ -21,6 +21,7 @@ struct VerifyConnectionHealth {
                 state: .reachable,
                 checkedAt: Date(timeIntervalSince1970: 200),
                 latencyMilliseconds: 42,
+                latencyKind: .proxyRequest,
                 failureSummary: nil
             )
         )
@@ -37,6 +38,7 @@ struct VerifyConnectionHealth {
         precondition(decoded.savedConnections.count == 1)
         precondition(decoded.savedConnections[0].healthCheck?.state == .reachable)
         precondition(decoded.savedConnections[0].healthCheck?.latencyMilliseconds == 42)
+        precondition(decoded.savedConnections[0].healthCheck?.latencyKind == .proxyRequest)
     }
 
     private static func testLegacySnapshotWithoutHealthMetadata() throws {
@@ -88,6 +90,7 @@ struct VerifyConnectionHealth {
             state: .reachable,
             checkedAt: Date(),
             latencyMilliseconds: 12,
+            latencyKind: .proxyRequest,
             failureSummary: nil
         )
         precondition(fresh.freshness(now: Date(), ttl: 60) == .fresh)
@@ -96,6 +99,7 @@ struct VerifyConnectionHealth {
             state: .unreachable,
             checkedAt: Date(timeIntervalSinceNow: -3600),
             latencyMilliseconds: nil,
+            latencyKind: nil,
             failureSummary: "Timed out"
         )
         precondition(stale.freshness(now: Date(), ttl: 60) == .stale)
@@ -116,6 +120,7 @@ struct VerifyConnectionHealth {
                 state: .reachable,
                 checkedAt: Date(timeIntervalSince1970: 200),
                 latencyMilliseconds: 34,
+                latencyKind: .tcpConnect,
                 failureSummary: nil
             )
         )
@@ -136,6 +141,7 @@ struct VerifyConnectionHealth {
 
         precondition(reconciled.savedConnections.count == 1)
         precondition(reconciled.savedConnections[0].healthCheck?.latencyMilliseconds == 34)
+        precondition(reconciled.savedConnections[0].healthCheck?.latencyKind == .tcpConnect)
         precondition(reconciled.selectedConnectionID == existing.id)
     }
 
