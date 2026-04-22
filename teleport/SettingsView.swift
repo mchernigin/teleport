@@ -112,12 +112,13 @@ private struct ConnectionsSettingsView: View {
         .sheet(item: $editingSubscription) { source in
             SubscriptionSettingsSheet(
                 source: source,
-                onSave: { customName, urlString, autoUpdateIntervalMinutes in
+                onSave: { customName, urlString, autoUpdateIntervalMinutes, filterDuplicateImports in
                     viewModel.updateSubscriptionSettings(
                         id: source.id,
                         customName: customName,
                         urlString: urlString,
-                        autoUpdateIntervalMinutes: autoUpdateIntervalMinutes
+                        autoUpdateIntervalMinutes: autoUpdateIntervalMinutes,
+                        filterDuplicateImports: filterDuplicateImports
                     )
                 }
             )
@@ -586,20 +587,22 @@ private struct SubscriptionSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let source: SubscriptionSource
-    let onSave: (String, String, Int?) -> Void
+    let onSave: (String, String, Int?, Bool) -> Void
 
     @State private var customName: String
     @State private var urlString: String
     @State private var selectedIntervalMinutes: Int?
+    @State private var filterDuplicateImports: Bool
 
     private let intervalOptions: [Int?] = [nil, 5, 15, 30, 60, 180, 360, 720, 1440]
 
-    init(source: SubscriptionSource, onSave: @escaping (String, String, Int?) -> Void) {
+    init(source: SubscriptionSource, onSave: @escaping (String, String, Int?, Bool) -> Void) {
         self.source = source
         self.onSave = onSave
         _customName = State(initialValue: source.title)
         _urlString = State(initialValue: source.urlString)
         _selectedIntervalMinutes = State(initialValue: source.autoUpdateIntervalMinutes)
+        _filterDuplicateImports = State(initialValue: source.filterDuplicateImports)
     }
 
     var body: some View {
@@ -636,6 +639,8 @@ private struct SubscriptionSettingsSheet: View {
                 .pickerStyle(.menu)
             }
 
+            Toggle("Filter duplicate configs", isOn: $filterDuplicateImports)
+
             HStack {
                 Spacer()
 
@@ -644,7 +649,7 @@ private struct SubscriptionSettingsSheet: View {
                 }
 
                 Button("Save") {
-                    onSave(customName, urlString, selectedIntervalMinutes)
+                    onSave(customName, urlString, selectedIntervalMinutes, filterDuplicateImports)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

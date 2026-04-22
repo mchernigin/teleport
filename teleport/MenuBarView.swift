@@ -101,12 +101,6 @@ struct MenuBarView: View {
                             }
                         }
                     }
-
-                    Divider()
-
-                    Button("Refresh health") {
-                        viewModel.refreshVisibleConnectionHealth()
-                    }
                 } label: {
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -151,7 +145,8 @@ struct MenuBarView: View {
     @ViewBuilder
     private func subscriptionMenu(_ source: SubscriptionSource) -> some View {
         let connections = viewModel.importedConnections(for: source.id)
-        Menu("\(source.displayName) (\(connections.count))") {
+
+        Menu {
             if connections.isEmpty {
                 Button("No imported configs") {}
                     .disabled(true)
@@ -160,6 +155,8 @@ struct MenuBarView: View {
                     connectionSelectionButton(connection)
                 }
             }
+        } label: {
+            Text("\(source.displayName) (\(connections.count))")
         }
     }
 
@@ -175,7 +172,7 @@ struct MenuBarView: View {
     }
 
     private func connectionLabel(for connection: SavedConnection) -> String {
-        "\(connection.configuration.displayName) • \(viewModel.healthSummary(for: connection))"
+        connection.configuration.displayName
     }
 
     private var actionSection: some View {

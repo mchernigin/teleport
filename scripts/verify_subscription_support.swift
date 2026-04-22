@@ -9,6 +9,8 @@ struct VerifySubscriptionSupport {
         try testInsecureTLSParsingAndPersistence()
         try testSubscriptionSnapshotRoundTrip()
         try testLegacyMultiConfigSnapshotDecoding()
+        try testLegacySubscriptionDefaultsDuplicateFilteringToEnabled()
+        try testDuplicateSubscriptionImportFiltering()
         try testSelectionPreservationAcrossRefresh()
         print("verify_subscription_support: all checks passed")
     }
@@ -103,6 +105,7 @@ struct VerifySubscriptionSupport {
             urlString: "https://example.com/subscription",
             title: "example.com",
             savedAt: Date(timeIntervalSince1970: 0),
+            filterDuplicateImports: false,
             lastRefreshedAt: Date(timeIntervalSince1970: 200),
             lastError: nil,
             lastSkippedCount: 1
@@ -121,6 +124,7 @@ struct VerifySubscriptionSupport {
         precondition(decoded.savedConnections.count == 1)
         precondition(decoded.savedConnections[0].source?.subscriptionSourceID == sourceID)
         precondition(decoded.selectedConnectionID == importedConnection.id)
+        precondition(decoded.subscriptionSources[0].filterDuplicateImports == false)
     }
 
     private static func testLegacyMultiConfigSnapshotDecoding() throws {
@@ -166,6 +170,64 @@ struct VerifySubscriptionSupport {
         precondition(decoded.savedConnections.count == 1)
         precondition(decoded.savedConnections[0].source == nil)
         precondition(decoded.savedConnections[0].configuration.allowsInsecureTLS == false)
+    }
+
+    private static func testLegacySubscriptionDefaultsDuplicateFilteringToEnabled() throws {
+        let legacyJSON = """
+        {
+          "savedConnections": [],
+          "subscriptionSources": [
+            {
+              "id": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+              "urlString": "https://example.com/subscription",
+              "title": "example.com",
+              "savedAt": 0,
+              "autoUpdateIntervalMinutes": 60,
+              "lastRefreshedAt": 200,
+              "lastError": null,
+              "lastSkippedCount": 0
+            }
+          ],
+          "selectedConnectionID": null,
+          "proxyEndpoint": {
+            "host": "127.0.0.1",
+            "httpPort": 8080,
+            "socksPort": 1080
+          }
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(AppSnapshot.self, from: legacyJSON)
+        precondition(decoded.subscriptionSources.count == 1)
+        precondition(decoded.subscriptionSources[0].filterDuplicateImports == true)
+    }
+
+    private static func testDuplicateSubscriptionImportFiltering() throws {
+        let parser = ConnectionLinkParser()
+        let sourceID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let links = [
+            "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls&type=tcp&sni=example.com#Alpha",
+            "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls&type=tcp&sni=example.com#Beta",
+            sampleLinks()[1]
+        ]
+
+        let filtered = try AppViewModel.importSubscriptionEntries(
+            links: links,
+            parser: parser,
+            sourceID: sourceID,
+            filterDuplicateImports: true
+        )
+        precondition(filtered.importedEntries.count == 2)
+        precondition(filtered.importedEntries[0].configuration.displayName == "Alpha")
+        precondition(filtered.importedEntries[1].configuration.displayName == "Beta")
+
+        let unfiltered = try AppViewModel.importSubscriptionEntries(
+            links: links,
+            parser: parser,
+            sourceID: sourceID,
+            filterDuplicateImports: false
+        )
+        precondition(unfiltered.importedEntries.count == 3)
     }
 
     private static func testSelectionPreservationAcrossRefresh() throws {

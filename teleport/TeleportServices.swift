@@ -1279,7 +1279,7 @@ final class AppViewModel: ObservableObject {
     }
 
     var canChangeSelection: Bool {
-        !(connectionPhase == .running || connectionPhase == .starting || connectionPhase == .stopping || proxyPhase == .enabled || proxyPhase == .enabling || proxyPhase == .disabling)
+        !(connectionPhase == .starting || connectionPhase == .stopping || proxyPhase == .enabling || proxyPhase == .disabling)
     }
 
     var isConnected: Bool {
@@ -1416,7 +1416,7 @@ final class AppViewModel: ObservableObject {
     func removeConnection(id: UUID) {
         guard let index = savedConnections.firstIndex(where: { $0.id == id }) else { return }
 
-        if !canChangeSelection && selectedConnectionID == id {
+        if selectedConnectionID == id && hasActiveConnectionSession {
             lastError = "Disconnect before removing the active connection"
             return
         }
@@ -1437,7 +1437,7 @@ final class AppViewModel: ObservableObject {
     func removeSubscription(id: UUID) {
         let affectedConnections = importedConnections(for: id)
 
-        if !canChangeSelection,
+        if hasActiveConnectionSession,
            affectedConnections.contains(where: { $0.id == selectedConnectionID }) {
             lastError = "Disconnect before removing the active subscription"
             return
@@ -1456,8 +1456,13 @@ final class AppViewModel: ObservableObject {
     }
 
     func selectConnection(id: UUID) {
-        if !canChangeSelection, selectedConnectionID != id {
-            lastError = "Disconnect before switching connections"
+        guard savedConnectionsByID[id] != nil else { return }
+
+        let previousSelectionID = selectedConnectionID
+        let shouldReconnect = previousSelectionID != id && hasEstablishedConnection
+
+        if !canChangeSelection, previousSelectionID != id {
+            lastError = "Please wait for the current connection action to finish"
             return
         }
 
@@ -1468,13 +1473,17 @@ final class AppViewModel: ObservableObject {
         lastError = nil
         persistSettingError()
         enqueueHealthProbes(for: [id], force: false, priority: true)
+
+        if shouldReconnect {
+            reconnectToSelectedConnection()
+        }
     }
 
     func refreshSubscription(id: UUID) {
         refreshSubscription(id: id, autoSelectFirstImported: false)
     }
 
-    func updateSubscriptionSettings(id: UUID, customName: String, urlString: String, autoUpdateIntervalMinutes: Int?) {
+    func updateSubscriptionSettings(id: UUID, customName: String, urlString: String, autoUpdateIntervalMinutes: Int?, filterDuplicateImports: Bool) {
         guard let existingSource = subscriptionSources.first(where: { $0.id == id }) else { return }
 
         do {
@@ -1492,6 +1501,7 @@ final class AppViewModel: ObservableObject {
                 source.title = trimmedName
                 source.urlString = normalizedURL
                 source.autoUpdateIntervalMinutes = autoUpdateIntervalMinutes
+                source.filterDuplicateImports = filterDuplicateImports
                 if urlChanged {
                     source.lastError = nil
                     source.lastRefreshedAt = nil
@@ -1529,6 +1539,88 @@ final class AppViewModel: ObservableObject {
             return
         }
 
+        startConnection(using: selectedConfiguration)
+    }
+
+    func disconnect() {
+        stopConnectionForUserInitiatedDisconnect()
+    }
+
+    func handleAppTermination() {
+        teardownConnection(resetError: true)
+    }
+
+    private var hasEstablishedConnection: Bool {
+        connectionPhase == .running || proxyPhase == .enabled
+    }
+
+    private var hasActiveConnectionSession: Bool {
+        connectionPhase == .running
+            || connectionPhase == .starting
+            || connectionPhase == .stopping
+            || connectionPhase == .failed
+            || proxyPhase == .enabled
+            || proxyPhase == .enabling
+            || proxyPhase == .disabling
+            || proxyPhase == .failed
+    }
+
+    private func reconnectToSelectedConnection() {
+        guard let selectedConfiguration else {
+            connectionPhase = .unconfigured
+            lastError = "Add and select a connection first"
+            return
+        }
+
+        let proxyEndpoint = proxyEndpoint
+        let runtimeManager = runtimeManager
+        let proxyService = proxyService
+        let shouldDisableProxy = shouldManageSystemProxy
+
+        connectionPhase = .stopping
+        proxyPhase = .disabling
+        lastError = nil
+        updateMenuBarAnimation()
+
+        operationQueue.async { [weak self] in
+            do {
+                if shouldDisableProxy {
+                    try proxyService.disableProxy()
+                }
+
+                runtimeManager.stop()
+
+                Task { @MainActor [weak self] in
+                    self?.connectionPhase = .starting
+                    self?.proxyPhase = .enabling
+                    self?.updateMenuBarAnimation()
+                }
+
+                let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: selectedConfiguration)
+                try runtimeManager.start(configURL: configURL)
+                try proxyService.enableProxy(endpoint: proxyEndpoint)
+
+                Task { @MainActor [weak self] in
+                    self?.connectionPhase = .running
+                    self?.proxyPhase = .enabled
+                    self?.lastError = nil
+                    self?.updateMenuBarAnimation()
+                }
+            } catch {
+                runtimeManager.stop()
+                try? proxyService.disableProxy()
+
+                Task { @MainActor [weak self] in
+                    self?.connectionPhase = .failed
+                    self?.proxyPhase = .failed
+                    self?.lastError = error.localizedDescription
+                    self?.updateMenuBarAnimation()
+                }
+            }
+        }
+    }
+
+    private func startConnection(using configuration: ConnectionConfiguration) {
         let proxyEndpoint = proxyEndpoint
         let runtimeManager = runtimeManager
         let proxyService = proxyService
@@ -1536,10 +1628,11 @@ final class AppViewModel: ObservableObject {
         connectionPhase = .starting
         proxyPhase = .enabling
         lastError = nil
+        updateMenuBarAnimation()
 
         operationQueue.async { [weak self] in
             do {
-                let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: selectedConfiguration)
+                let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: configuration)
                 try runtimeManager.start(configURL: configURL)
                 try proxyService.enableProxy(endpoint: proxyEndpoint)
 
@@ -1562,14 +1655,19 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func disconnect() {
-        let shouldDisableProxy = proxyPhase == .enabled || proxyPhase == .enabling || proxyPhase == .failed || proxyPhase == .disabling
+    private var shouldManageSystemProxy: Bool {
+        proxyPhase == .enabled || proxyPhase == .enabling || proxyPhase == .failed || proxyPhase == .disabling
+    }
+
+    private func stopConnectionForUserInitiatedDisconnect() {
+        let shouldDisableProxy = shouldManageSystemProxy
         let hasSavedConfiguration = selectedConfiguration != nil
         let runtimeManager = runtimeManager
         let proxyService = proxyService
 
         connectionPhase = .stopping
         proxyPhase = .disabling
+        updateMenuBarAnimation()
 
         operationQueue.async { [weak self] in
             if shouldDisableProxy {
@@ -1600,10 +1698,6 @@ final class AppViewModel: ObservableObject {
                 self?.updateMenuBarAnimation()
             }
         }
-    }
-
-    func handleAppTermination() {
-        teardownConnection(resetError: true)
     }
 
     private func addManualConnection(from rawLink: String) -> Bool {
@@ -1642,7 +1736,8 @@ final class AppViewModel: ObservableObject {
                 urlString: normalizedURL,
                 title: subscriptionTitle(for: url),
                 savedAt: Date(),
-                autoUpdateIntervalMinutes: nil
+                autoUpdateIntervalMinutes: nil,
+                filterDuplicateImports: true
             )
 
             subscriptionSources.append(source)
@@ -1667,7 +1762,7 @@ final class AppViewModel: ObservableObject {
             return
         }
 
-        if !canChangeSelection,
+        if hasActiveConnectionSession,
            selectedConnection.source?.subscriptionSourceID == id {
             lastError = "Disconnect before refreshing the active subscription"
             return
@@ -1694,7 +1789,12 @@ final class AppViewModel: ObservableObject {
                 }
 
                 let links = try subscriptionClient.fetchCandidateLinks(from: url)
-                let importResult = try Self.importSubscriptionEntries(links: links, parser: parser, sourceID: source.id)
+                let importResult = try Self.importSubscriptionEntries(
+                    links: links,
+                    parser: parser,
+                    sourceID: source.id,
+                    filterDuplicateImports: source.filterDuplicateImports
+                )
 
                 Task { @MainActor [weak self] in
                     self?.applyImportedEntries(
@@ -1718,20 +1818,31 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    nonisolated private static func importSubscriptionEntries(
+    nonisolated static func importSubscriptionEntries(
         links: [String],
         parser: ConnectionLinkParser,
-        sourceID: UUID
+        sourceID: UUID,
+        filterDuplicateImports: Bool
     ) throws -> SubscriptionImportResult {
         var importedEntries: [ImportedSubscriptionEntry] = []
         var skippedCount = 0
+        var seenDuplicateKeys: Set<String> = []
 
         for rawLink in links {
             do {
                 let configuration = try parser.parse(rawLink)
+                let sourceEntryID = rawLink.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if filterDuplicateImports {
+                    let duplicateKey = configuration.duplicateFilterIdentity
+                    guard seenDuplicateKeys.insert(duplicateKey).inserted else {
+                        continue
+                    }
+                }
+
                 importedEntries.append(
                     ImportedSubscriptionEntry(
-                        sourceEntryID: rawLink.trimmingCharacters(in: .whitespacesAndNewlines),
+                        sourceEntryID: sourceEntryID,
                         configuration: configuration
                     )
                 )

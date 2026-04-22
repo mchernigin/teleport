@@ -178,6 +178,31 @@ struct ConnectionConfiguration: Codable, Equatable {
         }
     }
 
+    nonisolated var duplicateFilterIdentity: String {
+        let components: [String] = [
+            protocolType.rawValue,
+            host.lowercased(),
+            String(port),
+            security.rawValue,
+            transport.rawValue,
+            path ?? "",
+            hostHeader?.lowercased() ?? "",
+            serverName?.lowercased() ?? "",
+            alpn.map { $0.lowercased() }.joined(separator: ","),
+            fingerprint?.lowercased() ?? "",
+            publicKey ?? "",
+            shortID ?? "",
+            spiderX ?? "",
+            vlessUserID?.lowercased() ?? "",
+            vlessFlow?.lowercased() ?? "",
+            trojanPassword ?? "",
+            allowsInsecureTLS ? "1" : "0",
+            grpcServiceName ?? "",
+            transportMode?.lowercased() ?? ""
+        ]
+        return components.joined(separator: "|")
+    }
+
     private var transportSummary: String {
         switch transport {
         case .tcp:
@@ -343,6 +368,7 @@ struct SubscriptionSource: Codable, Equatable, Identifiable {
     var title: String
     let savedAt: Date
     var autoUpdateIntervalMinutes: Int?
+    var filterDuplicateImports: Bool
     var lastRefreshedAt: Date?
     var lastError: String?
     var lastSkippedCount: Int
@@ -365,6 +391,7 @@ struct SubscriptionSource: Codable, Equatable, Identifiable {
         title: String,
         savedAt: Date,
         autoUpdateIntervalMinutes: Int? = nil,
+        filterDuplicateImports: Bool = true,
         lastRefreshedAt: Date? = nil,
         lastError: String? = nil,
         lastSkippedCount: Int = 0
@@ -374,6 +401,7 @@ struct SubscriptionSource: Codable, Equatable, Identifiable {
         self.title = title
         self.savedAt = savedAt
         self.autoUpdateIntervalMinutes = autoUpdateIntervalMinutes
+        self.filterDuplicateImports = filterDuplicateImports
         self.lastRefreshedAt = lastRefreshedAt
         self.lastError = lastError
         self.lastSkippedCount = lastSkippedCount
@@ -385,6 +413,7 @@ struct SubscriptionSource: Codable, Equatable, Identifiable {
         case title
         case savedAt
         case autoUpdateIntervalMinutes
+        case filterDuplicateImports
         case lastRefreshedAt
         case lastError
         case lastSkippedCount
@@ -397,6 +426,7 @@ struct SubscriptionSource: Codable, Equatable, Identifiable {
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
         savedAt = try container.decode(Date.self, forKey: .savedAt)
         autoUpdateIntervalMinutes = try container.decodeIfPresent(Int.self, forKey: .autoUpdateIntervalMinutes)
+        filterDuplicateImports = try container.decodeIfPresent(Bool.self, forKey: .filterDuplicateImports) ?? true
         lastRefreshedAt = try container.decodeIfPresent(Date.self, forKey: .lastRefreshedAt)
         lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
         lastSkippedCount = try container.decodeIfPresent(Int.self, forKey: .lastSkippedCount) ?? 0
