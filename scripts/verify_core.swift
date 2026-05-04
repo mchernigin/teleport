@@ -261,6 +261,8 @@ struct VerifyCore {
             switch error {
             case .binaryNotFound:
                 break
+            case .startupTimedOut:
+                fatalError("Expected binaryNotFound")
             }
         }
     }

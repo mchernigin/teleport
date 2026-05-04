@@ -633,6 +633,23 @@ final class XrayRuntimeManager: @unchecked Sendable {
         self.process = process
     }
 
+    func waitUntilLocalProxyReady(endpoint: ProxyEndpoint, timeout: TimeInterval = 3) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        while Date() < deadline {
+            guard process?.isRunning == true else { return false }
+
+            if Self.canOpenTCPConnection(host: endpoint.host, port: endpoint.httpPort, timeout: 0.2),
+               Self.canOpenTCPConnection(host: endpoint.host, port: endpoint.socksPort, timeout: 0.2) {
+                return true
+            }
+
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+
+        return false
+    }
+
     func stop() {
         guard let process else {
             cleanupPipe()
@@ -679,13 +696,60 @@ final class XrayRuntimeManager: @unchecked Sendable {
         bundle.url(forResource: "xray-assets", withExtension: nil)
     }
 
+    private static func canOpenTCPConnection(host: String, port: Int, timeout: TimeInterval) -> Bool {
+        guard let rawPort = UInt16(exactly: port),
+              let endpointPort = NWEndpoint.Port(rawValue: rawPort) else {
+            return false
+        }
+
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: .tcp)
+        let semaphore = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var didComplete = false
+        var isReady = false
+
+        func finish(_ ready: Bool) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !didComplete else { return }
+            didComplete = true
+            isReady = ready
+            semaphore.signal()
+        }
+
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                finish(true)
+            case .failed, .cancelled:
+                finish(false)
+            default:
+                break
+            }
+        }
+
+        connection.start(queue: DispatchQueue.global(qos: .utility))
+        let waitResult = semaphore.wait(timeout: .now() + timeout)
+        if waitResult == .timedOut {
+            finish(false)
+        }
+        connection.cancel()
+        return isReady
+    }
+
     enum RuntimeError: LocalizedError {
         case binaryNotFound
+        case startupTimedOut(String?)
 
         var errorDescription: String? {
             switch self {
             case .binaryNotFound:
                 return "Bundled Xray binary was not found in the app resources."
+            case .startupTimedOut(let detail):
+                if let detail, !detail.isEmpty {
+                    return "Xray did not become ready: \(detail)"
+                }
+                return "Xray did not become ready before enabling the system proxy."
             }
         }
     }
@@ -693,21 +757,104 @@ final class XrayRuntimeManager: @unchecked Sendable {
 
 final class SystemProxyService: @unchecked Sendable {
     private let processRunner: (Process) throws -> Void
+    private let fileManager: FileManager
+    private var lastEnabledEndpoint: ProxyEndpoint?
 
-    init(processRunner: @escaping (Process) throws -> Void = { try $0.run() }) {
+    init(
+        processRunner: @escaping (Process) throws -> Void = { try $0.run() },
+        fileManager: FileManager = .default
+    ) {
         self.processRunner = processRunner
+        self.fileManager = fileManager
+    }
+
+    func hasSavedProxySnapshot() -> Bool {
+        fileManager.fileExists(atPath: proxySnapshotURL.path)
     }
 
     func enableProxy(endpoint: ProxyEndpoint) throws {
-        try setWebProxy(enabled: true, host: endpoint.host, port: endpoint.httpPort)
-        try setSecureWebProxy(enabled: true, host: endpoint.host, port: endpoint.httpPort)
-        try setSOCKSProxy(enabled: true, host: endpoint.host, port: endpoint.socksPort)
+        try persistCurrentProxyStateIfNeeded(endpoint: endpoint)
+
+        do {
+            try setWebProxy(enabled: true, host: endpoint.host, port: endpoint.httpPort)
+            try setSecureWebProxy(enabled: true, host: endpoint.host, port: endpoint.httpPort)
+            try setSOCKSProxy(enabled: true, host: endpoint.host, port: endpoint.socksPort)
+            lastEnabledEndpoint = endpoint
+        } catch {
+            try? restoreSavedProxyState()
+            throw error
+        }
     }
 
     func disableProxy() throws {
-        try setWebProxy(enabled: false, host: nil, port: nil)
-        try setSecureWebProxy(enabled: false, host: nil, port: nil)
-        try setSOCKSProxy(enabled: false, host: nil, port: nil)
+        if hasSavedProxySnapshot() {
+            try restoreSavedProxyState()
+            return
+        }
+
+        if let lastEnabledEndpoint {
+            try disableProxyIfMatching(endpoint: lastEnabledEndpoint)
+            self.lastEnabledEndpoint = nil
+            return
+        }
+
+        // Safety fallback for stale settings created before crash-safe snapshots existed.
+        // It only turns off proxies that still point at Teleport's default local endpoint.
+        try disableProxyIfMatching(endpoint: .default)
+    }
+
+    func restoreSavedProxyState() throws {
+        guard let snapshot = try loadSavedProxySnapshot() else { return }
+
+        let activeServices = Set(try activeNetworkServices())
+        for serviceSnapshot in snapshot.services where activeServices.contains(serviceSnapshot.serviceName) {
+            try restoreWebProxy(serviceSnapshot.webProxy, service: serviceSnapshot.serviceName)
+            try restoreSecureWebProxy(serviceSnapshot.secureWebProxy, service: serviceSnapshot.serviceName)
+            try restoreSOCKSProxy(serviceSnapshot.socksProxy, service: serviceSnapshot.serviceName)
+        }
+
+        try? fileManager.removeItem(at: proxySnapshotURL)
+        lastEnabledEndpoint = nil
+    }
+
+    private func persistCurrentProxyStateIfNeeded(endpoint: ProxyEndpoint) throws {
+        guard !hasSavedProxySnapshot() else { return }
+
+        let services = try activeNetworkServices()
+        let snapshots = try services.map { service in
+            NetworkServiceProxySnapshot(
+                serviceName: service,
+                webProxy: try readWebProxy(service: service),
+                secureWebProxy: try readSecureWebProxy(service: service),
+                socksProxy: try readSOCKSProxy(service: service)
+            )
+        }
+
+        if snapshots.contains(where: { $0.hasEnabledAuthenticatedProxy }) {
+            throw ProxyError.authenticatedProxyCannotBePreserved
+        }
+
+        let snapshot = ProxyStateSnapshot(createdAt: Date(), endpoint: endpoint, services: snapshots)
+        try fileManager.createDirectory(at: proxyStateDirectoryURL, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(snapshot)
+        try data.write(to: proxySnapshotURL, options: [.atomic])
+    }
+
+    private func loadSavedProxySnapshot() throws -> ProxyStateSnapshot? {
+        guard fileManager.fileExists(atPath: proxySnapshotURL.path) else { return nil }
+        let data = try Data(contentsOf: proxySnapshotURL)
+        return try JSONDecoder().decode(ProxyStateSnapshot.self, from: data)
+    }
+
+    private var proxyStateDirectoryURL: URL {
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("teleport", isDirectory: true)
+    }
+
+    private var proxySnapshotURL: URL {
+        proxyStateDirectoryURL.appendingPathComponent("system-proxy-snapshot.json")
     }
 
     private func activeNetworkServices() throws -> [String] {
@@ -719,6 +866,23 @@ final class SystemProxyService: @unchecked Sendable {
             .filter { !$0.isEmpty }
             .filter { !$0.hasPrefix("An asterisk") }
             .filter { !$0.hasPrefix("*") }
+    }
+
+    private func readWebProxy(service: String) throws -> NetworkProxySettings {
+        try readProxySettings(arguments: ["-getwebproxy", service])
+    }
+
+    private func readSecureWebProxy(service: String) throws -> NetworkProxySettings {
+        try readProxySettings(arguments: ["-getsecurewebproxy", service])
+    }
+
+    private func readSOCKSProxy(service: String) throws -> NetworkProxySettings {
+        try readProxySettings(arguments: ["-getsocksfirewallproxy", service])
+    }
+
+    private func readProxySettings(arguments: [String]) throws -> NetworkProxySettings {
+        let result = try runNetworkSetup(arguments: arguments)
+        return NetworkProxySettings(networkSetupOutput: result.standardOutput)
     }
 
     private func setWebProxy(enabled: Bool, host: String?, port: Int?) throws {
@@ -739,6 +903,46 @@ final class SystemProxyService: @unchecked Sendable {
         for service in try activeNetworkServices() {
             try runNetworkSetup(arguments: ["-setsocksfirewallproxy", service, host ?? "", port.map(String.init) ?? "0"])
             try runNetworkSetup(arguments: ["-setsocksfirewallproxystate", service, enabled ? "on" : "off"])
+        }
+    }
+
+    private func restoreWebProxy(_ settings: NetworkProxySettings, service: String) throws {
+        if let server = settings.server, let port = settings.port, !server.isEmpty, port > 0 {
+            try runNetworkSetup(arguments: ["-setwebproxy", service, server, String(port)])
+        }
+        try runNetworkSetup(arguments: ["-setwebproxystate", service, settings.enabled ? "on" : "off"])
+    }
+
+    private func restoreSecureWebProxy(_ settings: NetworkProxySettings, service: String) throws {
+        if let server = settings.server, let port = settings.port, !server.isEmpty, port > 0 {
+            try runNetworkSetup(arguments: ["-setsecurewebproxy", service, server, String(port)])
+        }
+        try runNetworkSetup(arguments: ["-setsecurewebproxystate", service, settings.enabled ? "on" : "off"])
+    }
+
+    private func restoreSOCKSProxy(_ settings: NetworkProxySettings, service: String) throws {
+        if let server = settings.server, let port = settings.port, !server.isEmpty, port > 0 {
+            try runNetworkSetup(arguments: ["-setsocksfirewallproxy", service, server, String(port)])
+        }
+        try runNetworkSetup(arguments: ["-setsocksfirewallproxystate", service, settings.enabled ? "on" : "off"])
+    }
+
+    private func disableProxyIfMatching(endpoint: ProxyEndpoint) throws {
+        for service in try activeNetworkServices() {
+            let webProxy = try readWebProxy(service: service)
+            if webProxy.matches(host: endpoint.host, port: endpoint.httpPort) {
+                try runNetworkSetup(arguments: ["-setwebproxystate", service, "off"])
+            }
+
+            let secureWebProxy = try readSecureWebProxy(service: service)
+            if secureWebProxy.matches(host: endpoint.host, port: endpoint.httpPort) {
+                try runNetworkSetup(arguments: ["-setsecurewebproxystate", service, "off"])
+            }
+
+            let socksProxy = try readSOCKSProxy(service: service)
+            if socksProxy.matches(host: endpoint.host, port: endpoint.socksPort) {
+                try runNetworkSetup(arguments: ["-setsocksfirewallproxystate", service, "off"])
+            }
         }
     }
 
@@ -766,16 +970,98 @@ final class SystemProxyService: @unchecked Sendable {
         return CommandResult(standardOutput: stdout, standardError: stderr)
     }
 
+    private struct ProxyStateSnapshot: Codable {
+        let createdAt: Date
+        let endpoint: ProxyEndpoint
+        let services: [NetworkServiceProxySnapshot]
+    }
+
+    private struct NetworkServiceProxySnapshot: Codable {
+        let serviceName: String
+        let webProxy: NetworkProxySettings
+        let secureWebProxy: NetworkProxySettings
+        let socksProxy: NetworkProxySettings
+
+        var hasEnabledAuthenticatedProxy: Bool {
+            [webProxy, secureWebProxy, socksProxy].contains { $0.enabled && $0.authenticated }
+        }
+    }
+
+    private struct NetworkProxySettings: Codable, Equatable {
+        let enabled: Bool
+        let server: String?
+        let port: Int?
+        let authenticated: Bool
+
+        init(enabled: Bool, server: String?, port: Int?, authenticated: Bool = false) {
+            self.enabled = enabled
+            self.server = server
+            self.port = port
+            self.authenticated = authenticated
+        }
+
+        init(networkSetupOutput: String) {
+            var enabled = false
+            var server: String?
+            var port: Int?
+            var authenticated = false
+
+            for line in networkSetupOutput.split(separator: "\n") {
+                let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count == 2 else { continue }
+
+                let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+
+                switch key {
+                case "enabled":
+                    enabled = Self.parseBoolean(value)
+                case "server":
+                    server = value.isEmpty ? nil : value
+                case "port":
+                    port = Int(value)
+                case "authenticated proxy enabled":
+                    authenticated = Self.parseBoolean(value)
+                default:
+                    continue
+                }
+            }
+
+            self.enabled = enabled
+            self.server = server
+            self.port = port
+            self.authenticated = authenticated
+        }
+
+        func matches(host: String, port expectedPort: Int) -> Bool {
+            enabled
+                && server?.caseInsensitiveCompare(host) == .orderedSame
+                && port == expectedPort
+        }
+
+        private static func parseBoolean(_ value: String) -> Bool {
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "yes", "true", "1", "on":
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
     struct CommandResult {
         let standardOutput: String
         let standardError: String
     }
 
     enum ProxyError: LocalizedError {
+        case authenticatedProxyCannotBePreserved
         case commandFailed(arguments: [String], standardError: String)
 
         var errorDescription: String? {
             switch self {
+            case .authenticatedProxyCannotBePreserved:
+                return "Existing authenticated system proxy settings cannot be safely preserved because macOS does not expose the saved proxy password. Disable those proxies before connecting."
             case let .commandFailed(arguments, standardError):
                 let command = arguments.joined(separator: " ")
                 if standardError.isEmpty {
@@ -786,7 +1072,6 @@ final class SystemProxyService: @unchecked Sendable {
         }
     }
 }
-
 struct ConnectionHealthProbeResult {
     let state: ConnectionHealthState
     let checkedAt: Date
@@ -1255,6 +1540,7 @@ final class AppViewModel: ObservableObject {
         startAutoRefreshTimer()
         updateMenuBarAnimation()
         scheduleInitialHealthRefresh()
+        restoreProxyStateFromPreviousSessionIfNeeded()
     }
 
     var selectedConnection: SavedConnection? {
@@ -1550,6 +1836,29 @@ final class AppViewModel: ObservableObject {
         teardownConnection(resetError: true)
     }
 
+    private func restoreProxyStateFromPreviousSessionIfNeeded() {
+        guard proxyService.hasSavedProxySnapshot() else { return }
+
+        let proxyService = proxyService
+        operationQueue.async { [weak self] in
+            do {
+                try proxyService.restoreSavedProxyState()
+
+                Task { @MainActor [weak self] in
+                    self?.proxyPhase = .disabled
+                    self?.lastError = nil
+                    self?.updateMenuBarAnimation()
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.proxyPhase = .failed
+                    self?.lastError = error.localizedDescription
+                    self?.updateMenuBarAnimation()
+                }
+            }
+        }
+    }
+
     private var hasEstablishedConnection: Bool {
         connectionPhase == .running || proxyPhase == .enabled
     }
@@ -1598,6 +1907,10 @@ final class AppViewModel: ObservableObject {
 
                 let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: selectedConfiguration)
                 try runtimeManager.start(configURL: configURL)
+                guard runtimeManager.waitUntilLocalProxyReady(endpoint: proxyEndpoint) else {
+                    let detail = runtimeManager.capturedErrorOutput()?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    throw XrayRuntimeManager.RuntimeError.startupTimedOut(detail)
+                }
                 try proxyService.enableProxy(endpoint: proxyEndpoint)
 
                 Task { @MainActor [weak self] in
@@ -1608,7 +1921,7 @@ final class AppViewModel: ObservableObject {
                 }
             } catch {
                 runtimeManager.stop()
-                try? proxyService.disableProxy()
+                try? proxyService.restoreSavedProxyState()
 
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .failed
@@ -1634,6 +1947,10 @@ final class AppViewModel: ObservableObject {
             do {
                 let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: configuration)
                 try runtimeManager.start(configURL: configURL)
+                guard runtimeManager.waitUntilLocalProxyReady(endpoint: proxyEndpoint) else {
+                    let detail = runtimeManager.capturedErrorOutput()?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    throw XrayRuntimeManager.RuntimeError.startupTimedOut(detail)
+                }
                 try proxyService.enableProxy(endpoint: proxyEndpoint)
 
                 Task { @MainActor [weak self] in
@@ -1644,6 +1961,7 @@ final class AppViewModel: ObservableObject {
                 }
             } catch {
                 runtimeManager.stop()
+                try? proxyService.restoreSavedProxyState()
 
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .failed
