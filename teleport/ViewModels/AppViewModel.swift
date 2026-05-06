@@ -20,8 +20,7 @@ final class AppViewModel: ObservableObject {
 
     private let parser: ConnectionLinkParser
     private let store: ConfigurationStore
-    private let runtimeManager: XrayRuntimeManager
-    private let proxyService: SystemProxyService
+    private let connectionBackend: ConnectionBackend
     private let subscriptionClient: SubscriptionClient
     private let healthProbeService: ConnectionHealthProbeService
     private let operationQueue = DispatchQueue(label: "dev.x.teleport.connection-operations", qos: .userInitiated)
@@ -43,11 +42,12 @@ final class AppViewModel: ObservableObject {
     private var subscriptionSourcesByID: [UUID: SubscriptionSource] = [:]
 
     convenience init() {
+        let runtimeManager = XrayRuntimeManager()
+        let proxyService = SystemProxyService()
         self.init(
             parser: ConnectionLinkParser(),
             store: ConfigurationStore(),
-            runtimeManager: XrayRuntimeManager(),
-            proxyService: SystemProxyService(),
+            connectionBackend: SystemProxyConnectionBackend(runtimeManager: runtimeManager, proxyService: proxyService),
             subscriptionClient: SubscriptionClient(),
             healthProbeService: ConnectionHealthProbeService()
         )
@@ -56,15 +56,13 @@ final class AppViewModel: ObservableObject {
     init(
         parser: ConnectionLinkParser,
         store: ConfigurationStore,
-        runtimeManager: XrayRuntimeManager,
-        proxyService: SystemProxyService,
+        connectionBackend: ConnectionBackend,
         subscriptionClient: SubscriptionClient,
         healthProbeService: ConnectionHealthProbeService
     ) {
         self.parser = parser
         self.store = store
-        self.runtimeManager = runtimeManager
-        self.proxyService = proxyService
+        self.connectionBackend = connectionBackend
         self.subscriptionClient = subscriptionClient
         self.healthProbeService = healthProbeService
 
@@ -390,12 +388,12 @@ final class AppViewModel: ObservableObject {
     }
 
     private func restoreProxyStateFromPreviousSessionIfNeeded() {
-        guard proxyService.hasSavedProxySnapshot() else { return }
+        guard connectionBackend.hasRestorableState() else { return }
 
-        let proxyService = proxyService
+        let connectionBackend = connectionBackend
         operationQueue.async { [weak self] in
             do {
-                try proxyService.restoreSavedProxyState()
+                try connectionBackend.restorePreviousState()
 
                 Task { @MainActor [weak self] in
                     self?.proxyPhase = .disabled
@@ -435,8 +433,7 @@ final class AppViewModel: ObservableObject {
         }
 
         let proxyEndpoint = proxyEndpoint
-        let runtimeManager = runtimeManager
-        let proxyService = proxyService
+        let connectionBackend = connectionBackend
         let shouldDisableProxy = shouldManageSystemProxy
 
         connectionPhase = .stopping
@@ -446,25 +443,17 @@ final class AppViewModel: ObservableObject {
 
         operationQueue.async { [weak self] in
             do {
-                if shouldDisableProxy {
-                    try proxyService.disableProxy()
-                }
-
-                runtimeManager.stop()
-
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .starting
                     self?.proxyPhase = .enabling
                     self?.updateMenuBarAnimation()
                 }
 
-                let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: selectedConfiguration)
-                try runtimeManager.start(configURL: configURL)
-                guard runtimeManager.waitUntilLocalProxyReady(endpoint: proxyEndpoint) else {
-                    let detail = runtimeManager.capturedErrorOutput()?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    throw XrayRuntimeManager.RuntimeError.startupTimedOut(detail)
-                }
-                try proxyService.enableProxy(endpoint: proxyEndpoint)
+                try connectionBackend.reconnect(
+                    configuration: selectedConfiguration,
+                    endpoint: proxyEndpoint,
+                    shouldDisableExistingProxy: shouldDisableProxy
+                )
 
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .running
@@ -473,9 +462,6 @@ final class AppViewModel: ObservableObject {
                     self?.updateMenuBarAnimation()
                 }
             } catch {
-                runtimeManager.stop()
-                try? proxyService.restoreSavedProxyState()
-
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .failed
                     self?.proxyPhase = .failed
@@ -488,8 +474,7 @@ final class AppViewModel: ObservableObject {
 
     private func startConnection(using configuration: ConnectionConfiguration) {
         let proxyEndpoint = proxyEndpoint
-        let runtimeManager = runtimeManager
-        let proxyService = proxyService
+        let connectionBackend = connectionBackend
 
         connectionPhase = .starting
         proxyPhase = .enabling
@@ -498,13 +483,7 @@ final class AppViewModel: ObservableObject {
 
         operationQueue.async { [weak self] in
             do {
-                let configURL = try XrayConfigurationWriter(proxyEndpoint: proxyEndpoint).writeConfig(for: configuration)
-                try runtimeManager.start(configURL: configURL)
-                guard runtimeManager.waitUntilLocalProxyReady(endpoint: proxyEndpoint) else {
-                    let detail = runtimeManager.capturedErrorOutput()?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    throw XrayRuntimeManager.RuntimeError.startupTimedOut(detail)
-                }
-                try proxyService.enableProxy(endpoint: proxyEndpoint)
+                try connectionBackend.start(configuration: configuration, endpoint: proxyEndpoint)
 
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .running
@@ -513,9 +492,6 @@ final class AppViewModel: ObservableObject {
                     self?.updateMenuBarAnimation()
                 }
             } catch {
-                runtimeManager.stop()
-                try? proxyService.restoreSavedProxyState()
-
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .failed
                     self?.proxyPhase = .failed
@@ -533,40 +509,28 @@ final class AppViewModel: ObservableObject {
     private func stopConnectionForUserInitiatedDisconnect() {
         let shouldDisableProxy = shouldManageSystemProxy
         let hasSavedConfiguration = selectedConfiguration != nil
-        let runtimeManager = runtimeManager
-        let proxyService = proxyService
+        let connectionBackend = connectionBackend
 
         connectionPhase = .stopping
         proxyPhase = .disabling
         updateMenuBarAnimation()
 
         operationQueue.async { [weak self] in
-            if shouldDisableProxy {
-                do {
-                    try proxyService.disableProxy()
-                    Task { @MainActor [weak self] in
-                        self?.proxyPhase = .disabled
-                        self?.lastError = nil
-                        self?.updateMenuBarAnimation()
-                    }
-                } catch {
-                    Task { @MainActor [weak self] in
-                        self?.proxyPhase = .failed
-                        self?.lastError = error.localizedDescription
-                        self?.updateMenuBarAnimation()
-                    }
-                }
-            }
-
-            runtimeManager.stop()
-
-            Task { @MainActor [weak self] in
-                self?.connectionPhase = hasSavedConfiguration ? .stopped : .unconfigured
-                if !shouldDisableProxy {
+            do {
+                try connectionBackend.stop(shouldDisableProxy: shouldDisableProxy)
+                Task { @MainActor [weak self] in
+                    self?.connectionPhase = hasSavedConfiguration ? .stopped : .unconfigured
                     self?.proxyPhase = .disabled
                     self?.lastError = nil
+                    self?.updateMenuBarAnimation()
                 }
-                self?.updateMenuBarAnimation()
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.connectionPhase = hasSavedConfiguration ? .stopped : .unconfigured
+                    self?.proxyPhase = .failed
+                    self?.lastError = error.localizedDescription
+                    self?.updateMenuBarAnimation()
+                }
             }
         }
     }
@@ -1008,42 +972,13 @@ final class AppViewModel: ObservableObject {
     }
 
     private func teardownConnection(resetError: Bool) {
-        let shouldDisableProxy = proxyPhase == .enabled || proxyPhase == .enabling || proxyPhase == .failed || proxyPhase == .disabling
-
-        if shouldDisableProxy {
-            do {
-                try proxyService.disableProxy()
-                Task { @MainActor [weak self] in
-                    self?.proxyPhase = .disabled
-                    if resetError {
-                        self?.lastError = nil
-                    }
-                    self?.updateMenuBarAnimation()
-                }
-            } catch {
-                Task { @MainActor [weak self] in
-                    self?.proxyPhase = .failed
-                    if !resetError {
-                        self?.lastError = error.localizedDescription
-                    }
-                    self?.updateMenuBarAnimation()
-                }
-            }
+        connectionBackend.teardown()
+        connectionPhase = selectedConfiguration == nil ? .unconfigured : .stopped
+        proxyPhase = .disabled
+        if resetError {
+            lastError = nil
         }
-
-        runtimeManager.stop()
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.connectionPhase = self.selectedConfiguration == nil ? .unconfigured : .stopped
-            if !shouldDisableProxy {
-                self.proxyPhase = .disabled
-                if resetError {
-                    self.lastError = nil
-                }
-            }
-            self.updateMenuBarAnimation()
-        }
+        updateMenuBarAnimation()
     }
 
     private func updateMenuBarAnimation() {

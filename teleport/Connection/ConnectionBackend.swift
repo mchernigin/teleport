@@ -1,0 +1,87 @@
+import Foundation
+
+protocol ConnectionBackend: AnyObject {
+    func hasRestorableState() -> Bool
+    func restorePreviousState() throws
+    func start(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint) throws
+    func reconnect(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint, shouldDisableExistingProxy: Bool) throws
+    func stop(shouldDisableProxy: Bool) throws
+    func teardown()
+}
+
+final class SystemProxyConnectionBackend: ConnectionBackend {
+    private let runtimeManager: XrayRuntimeManager
+    private let proxyService: SystemProxyService
+
+    init(runtimeManager: XrayRuntimeManager, proxyService: SystemProxyService) {
+        self.runtimeManager = runtimeManager
+        self.proxyService = proxyService
+    }
+
+    func hasRestorableState() -> Bool {
+        proxyService.hasSavedProxySnapshot()
+    }
+
+    func restorePreviousState() throws {
+        try proxyService.restoreSavedProxyState()
+    }
+
+    func start(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint) throws {
+        do {
+            try startRuntime(configuration: configuration, endpoint: endpoint)
+            try proxyService.enableProxy(endpoint: endpoint)
+        } catch {
+            runtimeManager.stop()
+            try? proxyService.restoreSavedProxyState()
+            throw error
+        }
+    }
+
+    func reconnect(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint, shouldDisableExistingProxy: Bool) throws {
+        do {
+            if shouldDisableExistingProxy {
+                try proxyService.disableProxy()
+            }
+
+            runtimeManager.stop()
+            try startRuntime(configuration: configuration, endpoint: endpoint)
+            try proxyService.enableProxy(endpoint: endpoint)
+        } catch {
+            runtimeManager.stop()
+            try? proxyService.restoreSavedProxyState()
+            throw error
+        }
+    }
+
+    func stop(shouldDisableProxy: Bool) throws {
+        var disableError: Error?
+
+        if shouldDisableProxy {
+            do {
+                try proxyService.disableProxy()
+            } catch {
+                disableError = error
+            }
+        }
+
+        runtimeManager.stop()
+
+        if let disableError {
+            throw disableError
+        }
+    }
+
+    func teardown() {
+        runtimeManager.stop()
+        try? proxyService.restoreSavedProxyState()
+    }
+
+    private func startRuntime(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint) throws {
+        let configURL = try XrayConfigurationWriter(proxyEndpoint: endpoint).writeConfig(for: configuration)
+        try runtimeManager.start(configURL: configURL)
+        guard runtimeManager.waitUntilLocalProxyReady(endpoint: endpoint) else {
+            let detail = runtimeManager.capturedErrorOutput()?.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw XrayRuntimeManager.RuntimeError.startupTimedOut(detail)
+        }
+    }
+}
