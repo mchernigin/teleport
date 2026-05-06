@@ -28,7 +28,7 @@ xcodebuild -project teleport.xcodeproj -scheme teleport -configuration Debug bui
 A focused verification script for subscription parsing, persistence, and selection preservation is available at:
 
 ```bash
-swift teleport/TeleportModels.swift teleport/TeleportServices.swift scripts/verify_subscription_support.swift
+swiftc teleport/TeleportModels.swift teleport/Parsing/*.swift teleport/Persistence/*.swift teleport/Subscriptions/*.swift teleport/Xray/*.swift teleport/Proxy/*.swift teleport/Health/*.swift teleport/ViewModels/*.swift scripts/verify_subscription_support.swift -o /tmp/verify_subscription_support && /tmp/verify_subscription_support
 ```
 
 ## Connection health verification script
@@ -36,5 +36,5 @@ swift teleport/TeleportModels.swift teleport/TeleportServices.swift scripts/veri
 A focused verification script for health metadata persistence, freshness classification, and subscription reconciliation is available at:
 
 ```bash
-swift teleport/TeleportModels.swift teleport/TeleportServices.swift scripts/verify_connection_health.swift
+swiftc teleport/TeleportModels.swift teleport/Parsing/*.swift teleport/Persistence/*.swift teleport/Subscriptions/*.swift teleport/Xray/*.swift teleport/Proxy/*.swift teleport/Health/*.swift teleport/ViewModels/*.swift scripts/verify_connection_health.swift -o /tmp/verify_connection_health && /tmp/verify_connection_health
 ```
