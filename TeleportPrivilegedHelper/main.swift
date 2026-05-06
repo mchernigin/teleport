@@ -333,8 +333,10 @@ final class XrayTunController {
             ')
         fi
         if [ -z "$tun_interface" ]; then
-            printf '%s no Xray TUN interface was found for requested name %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$TUN_INTERFACE_NAME" >> "$CONTROL_LOG_FILE"
+            reason="Teleport VPN started Xray, but macOS did not create the expected TUN interface $TUN_INTERFACE_NAME."
+            printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$reason" >> "$CONTROL_LOG_FILE"
             ifconfig >> "$CONTROL_LOG_FILE" 2>&1 || true
+            printf '%s\n' "$reason" >&2
             kill "$pid" 2>/dev/null || true
             sleep 0.5
             kill -9 "$pid" 2>/dev/null || true
@@ -356,8 +358,10 @@ final class XrayTunController {
         case "$public_interface" in
             utun*) ;;
             *)
-                printf '%s public traffic did not select TUN after manual route setup\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONTROL_LOG_FILE"
+                reason="Teleport VPN started Xray, but macOS did not route public traffic through Teleport's TUN. Disconnect other VPN apps and try again."
+                printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$reason" >> "$CONTROL_LOG_FILE"
                 netstat -rn -f inet >> "$CONTROL_LOG_FILE" 2>&1 || true
+                printf '%s\n' "$reason" >&2
                 kill "$pid" 2>/dev/null || true
                 sleep 0.5
                 kill -9 "$pid" 2>/dev/null || true
@@ -370,7 +374,9 @@ final class XrayTunController {
 
         case "$protected_interface" in
             utun*)
-                printf '%s protected host still selected TUN; refusing to start to avoid a routing loop\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONTROL_LOG_FILE"
+                reason="Teleport VPN could not keep the proxy server route outside the tunnel. Disconnect other VPN apps and try again, or use System Proxy mode."
+                printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$reason" >> "$CONTROL_LOG_FILE"
+                printf '%s\n' "$reason" >&2
                 kill "$pid" 2>/dev/null || true
                 sleep 0.5
                 kill -9 "$pid" 2>/dev/null || true
@@ -421,8 +427,11 @@ final class XrayTunController {
     private func protectHostRouteCommands() -> String {
         """
         if [ -n "$gateway" ]; then
-            route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
-            route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
+            i=0
+            while route delete -host "$PROTECTED_HOST" >/dev/null 2>&1; do
+                i=$((i + 1))
+                [ "$i" -ge 10 ] && break
+            done
             route add -host "$PROTECTED_HOST" "$gateway" >> "$CONTROL_LOG_FILE" 2>&1 || route change -host "$PROTECTED_HOST" "$gateway" >> "$CONTROL_LOG_FILE" 2>&1 || true
         fi
         """
