@@ -21,10 +21,30 @@ struct XrayConfigurationWriter {
     }
 
     func writeConfig(for configuration: ConnectionConfiguration, to outputURL: URL) throws -> URL {
+        try writePayload(makePayload(configuration: configuration), to: outputURL)
+    }
+
+    func writeTunnelConfig(for configuration: ConnectionConfiguration, interfaceName: String, outboundInterface: String = "auto") throws -> URL {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("teleport", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        return try writeTunnelConfig(
+            for: configuration,
+            interfaceName: interfaceName,
+            outboundInterface: outboundInterface,
+            to: directory.appendingPathComponent("xray-tun-config.json")
+        )
+    }
+
+    func writeTunnelConfig(for configuration: ConnectionConfiguration, interfaceName: String, outboundInterface: String = "auto", to outputURL: URL) throws -> URL {
+        try writePayload(makeTunnelPayload(configuration: configuration, interfaceName: interfaceName, outboundInterface: outboundInterface), to: outputURL)
+    }
+
+    private func writePayload(_ payload: [String: Any], to outputURL: URL) throws -> URL {
         let directory = outputURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let payload = makePayload(configuration: configuration)
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: outputURL, options: .atomic)
         return outputURL
@@ -69,6 +89,81 @@ struct XrayConfigurationWriter {
             "routing": [
                 "domainStrategy": "AsIs",
                 "rules": [
+                    [
+                        "type": "field",
+                        "outboundTag": "proxy",
+                        "network": "tcp,udp"
+                    ]
+                ]
+            ]
+        ]
+    }
+
+    private func makeTunnelPayload(configuration: ConnectionConfiguration, interfaceName: String, outboundInterface: String) -> [String: Any] {
+        let streamSettings = makeStreamSettings(configuration: configuration)
+
+        return [
+            "log": [
+                "loglevel": "warning"
+            ],
+            "inbounds": [
+                [
+                    "tag": "tun",
+                    "protocol": "tun",
+                    "settings": [
+                        "name": interfaceName,
+                        "MTU": 9000,
+                        "gateway": [
+                            "172.18.0.1/30"
+                        ],
+                        "autoSystemRoutingTable": [
+                            "0.0.0.0/0"
+                        ],
+                        "autoOutboundsInterface": outboundInterface
+                    ],
+                    "sniffing": [
+                        "enabled": true,
+                        "destOverride": [
+                            "http",
+                            "tls"
+                        ]
+                    ]
+                ]
+            ],
+            "outbounds": [
+                [
+                    "tag": "proxy",
+                    "protocol": configuration.protocolType.rawValue,
+                    "settings": makeOutboundSettings(configuration: configuration),
+                    "streamSettings": streamSettings
+                ],
+                [
+                    "tag": "direct",
+                    "protocol": "freedom",
+                    "settings": [:]
+                ],
+                [
+                    "tag": "block",
+                    "protocol": "blackhole",
+                    "settings": [:]
+                ]
+            ],
+            "routing": [
+                "domainStrategy": "AsIs",
+                "rules": [
+                    [
+                        "type": "field",
+                        "network": "udp",
+                        "port": "135,137-139,5353",
+                        "outboundTag": "block"
+                    ],
+                    [
+                        "type": "field",
+                        "ip": [
+                            "224.0.0.0/3"
+                        ],
+                        "outboundTag": "block"
+                    ],
                     [
                         "type": "field",
                         "outboundTag": "proxy",

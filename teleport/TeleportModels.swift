@@ -18,6 +18,31 @@ enum ProxyPhase: String, Codable {
     case failed
 }
 
+enum ConnectionMode: String, Codable, CaseIterable, Identifiable {
+    case systemProxy
+    case vpn
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .systemProxy:
+            return "System Proxy"
+        case .vpn:
+            return "VPN"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .systemProxy:
+            return "Routes apps that respect macOS proxy settings through Xray."
+        case .vpn:
+            return "Full-device Xray TUN tunnel. Requires administrator approval to start and stop."
+        }
+    }
+}
+
 enum ConnectionHealthState: String, Codable {
     case unknown
     case queued
@@ -438,17 +463,20 @@ struct AppSnapshot: Codable, Equatable {
     var subscriptionSources: [SubscriptionSource]
     var selectedConnectionID: UUID?
     var proxyEndpoint: ProxyEndpoint
+    var connectionMode: ConnectionMode
 
     init(
         savedConnections: [SavedConnection],
         subscriptionSources: [SubscriptionSource] = [],
         selectedConnectionID: UUID?,
-        proxyEndpoint: ProxyEndpoint
+        proxyEndpoint: ProxyEndpoint,
+        connectionMode: ConnectionMode = .systemProxy
     ) {
         self.savedConnections = savedConnections
         self.subscriptionSources = subscriptionSources
         self.selectedConnectionID = selectedConnectionID
         self.proxyEndpoint = proxyEndpoint
+        self.connectionMode = connectionMode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -456,6 +484,7 @@ struct AppSnapshot: Codable, Equatable {
         case subscriptionSources
         case selectedConnectionID
         case proxyEndpoint
+        case connectionMode
     }
 
     init(from decoder: Decoder) throws {
@@ -464,6 +493,7 @@ struct AppSnapshot: Codable, Equatable {
         subscriptionSources = try container.decodeIfPresent([SubscriptionSource].self, forKey: .subscriptionSources) ?? []
         selectedConnectionID = try container.decodeIfPresent(UUID.self, forKey: .selectedConnectionID)
         proxyEndpoint = try container.decodeIfPresent(ProxyEndpoint.self, forKey: .proxyEndpoint) ?? .default
+        connectionMode = try container.decodeIfPresent(ConnectionMode.self, forKey: .connectionMode) ?? .systemProxy
     }
 }
 

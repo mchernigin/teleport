@@ -104,7 +104,7 @@ struct MenuBarView: View {
                 } label: {
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(viewModel.selectedConnection?.configuration.displayName ?? "Select connection")
+                        Text(viewModel.selectedConnection?.configuration.displayName ?? "Select connection")
                                 .foregroundStyle(.primary)
                             Text(connectionSubtitle)
                                 .font(.caption)

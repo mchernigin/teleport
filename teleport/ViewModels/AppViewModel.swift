@@ -14,13 +14,15 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var proxyPhase: ProxyPhase = .disabled
     @Published private(set) var lastError: String?
     @Published private(set) var proxyEndpoint: ProxyEndpoint
+    @Published private(set) var connectionMode: ConnectionMode
     @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
     @Published private(set) var refreshingHealthConnectionIDs: Set<UUID> = []
     @Published private(set) var queuedHealthConnectionIDs: Set<UUID> = []
 
     private let parser: ConnectionLinkParser
     private let store: ConfigurationStore
-    private let connectionBackend: ConnectionBackend
+    private let connectionBackendFactory: ConnectionBackendFactory
+    private var connectionBackend: ConnectionBackend
     private let subscriptionClient: SubscriptionClient
     private let healthProbeService: ConnectionHealthProbeService
     private let operationQueue = DispatchQueue(label: "dev.x.teleport.connection-operations", qos: .userInitiated)
@@ -42,12 +44,10 @@ final class AppViewModel: ObservableObject {
     private var subscriptionSourcesByID: [UUID: SubscriptionSource] = [:]
 
     convenience init() {
-        let runtimeManager = XrayRuntimeManager()
-        let proxyService = SystemProxyService()
         self.init(
             parser: ConnectionLinkParser(),
             store: ConfigurationStore(),
-            connectionBackend: SystemProxyConnectionBackend(runtimeManager: runtimeManager, proxyService: proxyService),
+            connectionBackendFactory: ConnectionBackendFactory(),
             subscriptionClient: SubscriptionClient(),
             healthProbeService: ConnectionHealthProbeService()
         )
@@ -56,17 +56,19 @@ final class AppViewModel: ObservableObject {
     init(
         parser: ConnectionLinkParser,
         store: ConfigurationStore,
-        connectionBackend: ConnectionBackend,
+        connectionBackendFactory: ConnectionBackendFactory,
         subscriptionClient: SubscriptionClient,
         healthProbeService: ConnectionHealthProbeService
     ) {
         self.parser = parser
         self.store = store
-        self.connectionBackend = connectionBackend
+        self.connectionBackendFactory = connectionBackendFactory
         self.subscriptionClient = subscriptionClient
         self.healthProbeService = healthProbeService
 
         let snapshot = store.load()
+        connectionMode = snapshot.connectionMode
+        connectionBackend = connectionBackendFactory.makeBackend(for: snapshot.connectionMode)
         proxyEndpoint = snapshot.proxyEndpoint
         subscriptionSources = snapshot.subscriptionSources
 
@@ -367,6 +369,23 @@ final class AppViewModel: ObservableObject {
 
     func clearError() {
         lastError = nil
+    }
+
+    func selectConnectionMode(_ mode: ConnectionMode) {
+        guard mode != connectionMode else { return }
+        guard canChangeSelection && !hasActiveConnectionSession else {
+            lastError = "Disconnect before changing connection mode"
+            return
+        }
+
+        connectionBackend.teardown()
+        connectionMode = mode
+        connectionBackend = connectionBackendFactory.makeBackend(for: mode)
+        proxyPhase = .disabled
+        connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
+        lastError = nil
+        updateMenuBarAnimation()
+        persistSettingError()
     }
 
     func connect() {
@@ -1024,7 +1043,8 @@ final class AppViewModel: ObservableObject {
             savedConnections: persistedConnections,
             subscriptionSources: subscriptionSources,
             selectedConnectionID: selectedConnectionID ?? savedConnections.first?.id,
-            proxyEndpoint: proxyEndpoint
+            proxyEndpoint: proxyEndpoint,
+            connectionMode: connectionMode
         )
     }
 

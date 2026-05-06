@@ -13,6 +13,8 @@ struct ConnectionsSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            connectionModeSection
+
             if let error = viewModel.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
@@ -110,6 +112,35 @@ struct ConnectionsSettingsView: View {
         }
         .sheet(item: $qrPayload) { payload in
             QRCodeSheet(payload: payload)
+        }
+    }
+
+    private var connectionModeSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Mode")
+                    .font(.subheadline.weight(.semibold))
+
+                Picker(
+                    "Mode",
+                    selection: Binding(
+                        get: { viewModel.connectionMode },
+                        set: { viewModel.selectConnectionMode($0) }
+                    )
+                ) {
+                    ForEach(ConnectionMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+                .disabled(!viewModel.canChangeSelection)
+            }
+
+            Text(viewModel.connectionMode.description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
