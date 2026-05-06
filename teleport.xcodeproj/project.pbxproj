@@ -6,8 +6,24 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		C2F100032F98000000CCB832 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2F100012F98000000CCB832 /* main.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C2F1000B2F98000000CCB832 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C2DEAC042F96D9FB00CCB832 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C2F100062F98000000CCB832;
+			remoteInfo = dev.x.teleport.PrivilegedHelper;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		C2DEAC0C2F96D9FB00CCB832 /* Teleport.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Teleport.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C2F100012F98000000CCB832 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		C2F100022F98000000CCB832 /* dev.x.teleport.PrivilegedHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = dev.x.teleport.PrivilegedHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -26,6 +42,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C2F100052F98000000CCB832 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -33,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				C2DEAC0E2F96D9FB00CCB832 /* teleport */,
+				C2F1000A2F98000000CCB832 /* TeleportPrivilegedHelper */,
 				C2DEAC0D2F96D9FB00CCB832 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,8 +65,17 @@
 			isa = PBXGroup;
 			children = (
 				C2DEAC0C2F96D9FB00CCB832 /* Teleport.app */,
+				C2F100022F98000000CCB832 /* dev.x.teleport.PrivilegedHelper */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C2F1000A2F98000000CCB832 /* TeleportPrivilegedHelper */ = {
+			isa = PBXGroup;
+			children = (
+				C2F100012F98000000CCB832 /* main.swift */,
+			);
+			path = TeleportPrivilegedHelper;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -55,10 +88,12 @@
 				C2DEAC082F96D9FB00CCB832 /* Sources */,
 				C2DEAC092F96D9FB00CCB832 /* Frameworks */,
 				C2DEAC0A2F96D9FB00CCB832 /* Resources */,
+				C2F1000D2F98000000CCB832 /* Copy Privileged Helper */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				C2F1000C2F98000000CCB832 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C2DEAC0E2F96D9FB00CCB832 /* teleport */,
@@ -69,6 +104,24 @@
 			productName = teleport;
 			productReference = C2DEAC0C2F96D9FB00CCB832 /* Teleport.app */;
 			productType = "com.apple.product-type.application";
+		};
+		C2F100062F98000000CCB832 /* dev.x.teleport.PrivilegedHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C2F100072F98000000CCB832 /* Build configuration list for PBXNativeTarget "dev.x.teleport.PrivilegedHelper" */;
+			buildPhases = (
+				C2F100042F98000000CCB832 /* Sources */,
+				C2F100052F98000000CCB832 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = dev.x.teleport.PrivilegedHelper;
+			packageProductDependencies = (
+			);
+			productName = dev.x.teleport.PrivilegedHelper;
+			productReference = C2F100022F98000000CCB832 /* dev.x.teleport.PrivilegedHelper */;
+			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
 
@@ -81,6 +134,9 @@
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					C2DEAC0B2F96D9FB00CCB832 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					C2F100062F98000000CCB832 = {
 						CreatedOnToolsVersion = 26.3;
 					};
 				};
@@ -100,6 +156,7 @@
 			projectRoot = "";
 			targets = (
 				C2DEAC0B2F96D9FB00CCB832 /* teleport */,
+				C2F100062F98000000CCB832 /* dev.x.teleport.PrivilegedHelper */,
 			);
 		};
 /* End PBXProject section */
@@ -114,6 +171,29 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		C2F1000D2F98000000CCB832 /* Copy Privileged Helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/dev.x.teleport.PrivilegedHelper",
+			);
+			name = "Copy Privileged Helper";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/PrivilegedHelperTools/dev.x.teleport.PrivilegedHelper",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nDEST=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/PrivilegedHelperTools\"\nmkdir -p \"$DEST\"\ncp \"$BUILT_PRODUCTS_DIR/dev.x.teleport.PrivilegedHelper\" \"$DEST/dev.x.teleport.PrivilegedHelper\"\nchmod 755 \"$DEST/dev.x.teleport.PrivilegedHelper\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		C2DEAC082F96D9FB00CCB832 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -122,7 +202,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C2F100042F98000000CCB832 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C2F100032F98000000CCB832 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C2F1000C2F98000000CCB832 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C2F100062F98000000CCB832 /* dev.x.teleport.PrivilegedHelper */;
+			targetProxy = C2F1000B2F98000000CCB832 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		C2DEAC152F96D9FE00CCB832 /* Debug */ = {
@@ -311,6 +407,37 @@
 			};
 			name = Release;
 		};
+		C2F100082F98000000CCB832 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ZTB359LSTB;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.x.teleport.PrivilegedHelper;
+				PRODUCT_NAME = dev.x.teleport.PrivilegedHelper;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		C2F100092F98000000CCB832 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ZTB359LSTB;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.x.teleport.PrivilegedHelper;
+				PRODUCT_NAME = dev.x.teleport.PrivilegedHelper;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -328,6 +455,15 @@
 			buildConfigurations = (
 				C2DEAC182F96D9FE00CCB832 /* Debug */,
 				C2DEAC192F96D9FE00CCB832 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C2F100072F98000000CCB832 /* Build configuration list for PBXNativeTarget "dev.x.teleport.PrivilegedHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C2F100082F98000000CCB832 /* Debug */,
+				C2F100092F98000000CCB832 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

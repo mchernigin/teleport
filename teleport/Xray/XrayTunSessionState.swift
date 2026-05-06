@@ -20,7 +20,6 @@ struct XrayTunRuntimePaths: Sendable {
     var stateDirectoryURL: URL
     var pidFileURL: URL
     var logFileURL: URL
-    var launchScriptURL: URL
     var protectedHostFileURL: URL
     var controlLogFileURL: URL
     var sessionStateFileURL: URL
@@ -30,7 +29,6 @@ struct XrayTunRuntimePaths: Sendable {
         stateDirectoryURL = baseURL.appendingPathComponent("teleport", isDirectory: true)
         pidFileURL = stateDirectoryURL.appendingPathComponent("xray-tun.pid")
         logFileURL = stateDirectoryURL.appendingPathComponent("xray-tun.log")
-        launchScriptURL = stateDirectoryURL.appendingPathComponent("launch-xray-tun.sh")
         protectedHostFileURL = stateDirectoryURL.appendingPathComponent("xray-tun-protected-host")
         controlLogFileURL = stateDirectoryURL.appendingPathComponent("xray-tun-control.log")
         sessionStateFileURL = stateDirectoryURL.appendingPathComponent("xray-tun-session.json")

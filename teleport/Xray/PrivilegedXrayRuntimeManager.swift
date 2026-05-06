@@ -4,19 +4,20 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
     private let bundle: Bundle
     private let fileManager: FileManager
     private let paths: XrayTunRuntimePaths
-    private let shellRunner: PrivilegedShellRunner
-    private let scriptBuilder: XrayTunLaunchScriptBuilder
+    private let helperClient: PrivilegedHelperClient
+    private let helperInstaller: PrivilegedHelperInstaller
 
     init(
         bundle: Bundle = .main,
         fileManager: FileManager = .default,
-        shellRunner: PrivilegedShellRunner = PrivilegedShellRunner()
+        helperClient: PrivilegedHelperClient = PrivilegedHelperClient(),
+        helperInstaller: PrivilegedHelperInstaller? = nil
     ) {
         self.bundle = bundle
         self.fileManager = fileManager
         self.paths = XrayTunRuntimePaths(fileManager: fileManager)
-        self.shellRunner = shellRunner
-        self.scriptBuilder = XrayTunLaunchScriptBuilder(paths: paths)
+        self.helperClient = helperClient
+        self.helperInstaller = helperInstaller ?? PrivilegedHelperInstaller(bundle: bundle)
     }
 
     func runtimeURL() -> URL? {
@@ -30,12 +31,9 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
             throw XrayRuntimeManager.RuntimeError.binaryNotFound
         }
 
-        let launchScript = scriptBuilder.makeStartScript(runtimeURL: runtimeURL, session: session)
-        try launchScript.write(to: paths.launchScriptURL, atomically: true, encoding: .utf8)
-        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: paths.launchScriptURL.path)
-
         do {
-            try shellRunner.runAdministratorShellScript(PrivilegedShellRunner.shellQuote(paths.launchScriptURL.path))
+            try helperInstaller.ensureInstalled(runtimeURL: runtimeURL)
+            try helperClient.start(session: session, paths: paths)
             try persistSessionState(for: session)
         } catch {
             throw XrayTunRuntimeError.startFailed(summary: readableSummary(from: error), details: diagnosticDetails(from: error))
@@ -65,10 +63,20 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
         let sessionState = readSessionState()
         let pid = sessionState.map(\.pid) ?? readPID()
         let protectedHost = sessionState?.protectedHost ?? readProtectedHost()
-        let stopScript = scriptBuilder.makeStopScript(pid: pid, protectedHost: protectedHost)
-
         do {
-            try shellRunner.runAdministratorShellScript(stopScript)
+            try helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost)
+        } catch PrivilegedHelperClientError.unavailable(_) where pid == nil && protectedHost == nil {
+            return
+        } catch PrivilegedHelperClientError.unavailable(_) {
+            do {
+                guard let runtimeURL = runtimeURL() else {
+                    throw XrayRuntimeManager.RuntimeError.binaryNotFound
+                }
+                try helperInstaller.ensureInstalled(runtimeURL: runtimeURL)
+                try helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost)
+            } catch {
+                throw XrayTunRuntimeError.stopFailed(summary: readableSummary(from: error), details: diagnosticDetails(from: error))
+            }
         } catch {
             throw XrayTunRuntimeError.stopFailed(summary: readableSummary(from: error), details: diagnosticDetails(from: error))
         }

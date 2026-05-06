@@ -22,7 +22,7 @@ System Proxy mode starts the bundled Xray runtime as the current user, exposes l
 
 ### VPN
 
-VPN mode starts Xray with its TUN inbound using administrator privileges. Teleport asks macOS for an admin password because creating a TUN interface and changing routes requires root access.
+VPN mode starts Xray with its TUN inbound through Teleport's privileged helper. Teleport asks macOS for an admin password the first time it installs or updates the helper because creating a TUN interface and changing routes requires root access. After the helper is installed, normal connect/disconnect operations do not store or require the admin password.
 
 VPN mode installs split default IPv4 routes:
 
@@ -34,6 +34,14 @@ VPN mode installs split default IPv4 routes:
 It also protects the selected proxy server with a host route through the original network gateway so Xray's own outbound connection does not loop back into the tunnel.
 
 Disconnect other VPN apps before using VPN mode. If another VPN owns the default `utun` route, Teleport refuses to start VPN mode; use System Proxy mode when another VPN must remain active.
+
+The helper accepts commands only from the active console user and verifies the Teleport app code signature before running privileged actions. It installs these root-owned files:
+
+```text
+/Library/PrivilegedHelperTools/dev.x.teleport.PrivilegedHelper
+/Library/PrivilegedHelperTools/dev.x.teleport.xray
+/Library/LaunchDaemons/dev.x.teleport.PrivilegedHelper.plist
+```
 
 Runtime diagnostics for VPN mode are written under:
 
