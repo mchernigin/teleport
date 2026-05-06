@@ -12,7 +12,12 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var selectedConnectionID: UUID?
     @Published private(set) var connectionPhase: ConnectionPhase = .unconfigured
     @Published private(set) var proxyPhase: ProxyPhase = .disabled
-    @Published private(set) var lastError: String?
+    @Published private(set) var lastError: String? {
+        didSet {
+            lastErrorDetails = nil
+        }
+    }
+    @Published private(set) var lastErrorDetails: String?
     @Published private(set) var proxyEndpoint: ProxyEndpoint
     @Published private(set) var connectionMode: ConnectionMode
     @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
@@ -369,6 +374,7 @@ final class AppViewModel: ObservableObject {
 
     func clearError() {
         lastError = nil
+        lastErrorDetails = nil
     }
 
     func selectConnectionMode(_ mode: ConnectionMode) {
@@ -422,7 +428,7 @@ final class AppViewModel: ObservableObject {
             } catch {
                 Task { @MainActor [weak self] in
                     self?.proxyPhase = .failed
-                    self?.lastError = error.localizedDescription
+                    self?.applyConnectionError(error)
                     self?.updateMenuBarAnimation()
                 }
             }
@@ -484,7 +490,7 @@ final class AppViewModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .failed
                     self?.proxyPhase = .failed
-                    self?.lastError = error.localizedDescription
+                    self?.applyConnectionError(error)
                     self?.updateMenuBarAnimation()
                 }
             }
@@ -514,10 +520,22 @@ final class AppViewModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .failed
                     self?.proxyPhase = .failed
-                    self?.lastError = error.localizedDescription
+                    self?.applyConnectionError(error)
                     self?.updateMenuBarAnimation()
                 }
             }
+        }
+    }
+
+    private func applyConnectionError(_ error: Error) {
+        lastError = error.localizedDescription
+        if let localizedError = error as? LocalizedError,
+           let details = localizedError.failureReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !details.isEmpty,
+           details != lastError {
+            lastErrorDetails = details
+        } else {
+            lastErrorDetails = nil
         }
     }
 
@@ -547,7 +565,7 @@ final class AppViewModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = hasSavedConfiguration ? .stopped : .unconfigured
                     self?.proxyPhase = .failed
-                    self?.lastError = error.localizedDescription
+                    self?.applyConnectionError(error)
                     self?.updateMenuBarAnimation()
                 }
             }
@@ -665,7 +683,7 @@ final class AppViewModel: ObservableObject {
                     self?.updateSubscriptionSource(source.id) {
                         $0.lastError = error.localizedDescription
                     }
-                    self?.lastError = error.localizedDescription
+                    self?.applyConnectionError(error)
                     self?.persistSettingError()
                 }
             }
@@ -1023,7 +1041,7 @@ final class AppViewModel: ObservableObject {
                 try store.save(snapshot)
             } catch {
                 Task { @MainActor [weak self] in
-                    self?.lastError = error.localizedDescription
+                    self?.applyConnectionError(error)
                 }
             }
         }

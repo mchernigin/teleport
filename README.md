@@ -11,7 +11,37 @@ Teleport is a small macOS menu bar app for running a local Xray-based proxy with
 - saved connections with persistent selection across launches
 - lightweight server health checks with persisted sampled TCP latency and availability state
 - dedicated Settings window for connection and subscription management
-- only system proxy for now (Tun mode will be added later)
+- System Proxy mode for apps that respect macOS proxy settings
+- VPN mode using Xray's privileged TUN inbound for full-device IPv4 routing
+
+## Connection modes
+
+### System Proxy
+
+System Proxy mode starts the bundled Xray runtime as the current user, exposes local SOCKS/HTTP proxy ports, and enables macOS system proxy settings. It works for apps that honor system proxy configuration and does not require administrator approval.
+
+### VPN
+
+VPN mode starts Xray with its TUN inbound using administrator privileges. Teleport asks macOS for an admin password because creating a TUN interface and changing routes requires root access.
+
+VPN mode installs split default IPv4 routes:
+
+```text
+0.0.0.0/1   -> Xray utun
+128.0.0.0/1 -> Xray utun
+```
+
+It also protects the selected proxy server with a host route through the original network gateway so Xray's own outbound connection does not loop back into the tunnel.
+
+Disconnect other VPN apps before using VPN mode. If another VPN owns the default `utun` route, Teleport refuses to start VPN mode; use System Proxy mode when another VPN must remain active.
+
+Runtime diagnostics for VPN mode are written under:
+
+```text
+~/Library/Application Support/teleport/xray-tun.log
+~/Library/Application Support/teleport/xray-tun-control.log
+~/Library/Application Support/teleport/xray-tun-session.json
+```
 
 ## Build
 

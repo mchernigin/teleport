@@ -16,10 +16,23 @@ struct ConnectionsSettingsView: View {
             connectionModeSection
 
             if let error = viewModel.lastError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let details = viewModel.lastErrorDetails {
+                        DisclosureGroup("Diagnostic details") {
+                            Text(details)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .font(.caption)
+                    }
+                }
             }
 
             if viewModel.savedConnections.isEmpty && viewModel.subscriptionSources.isEmpty {
