@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		C2DEAC0C2F96D9FB00CCB832 /* teleport.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = teleport.app; path = Teleport.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C2DEAC0C2F96D9FB00CCB832 /* Teleport.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Teleport.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,7 +40,7 @@
 		C2DEAC0D2F96D9FB00CCB832 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C2DEAC0C2F96D9FB00CCB832 /* teleport.app */,
+				C2DEAC0C2F96D9FB00CCB832 /* Teleport.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -67,7 +67,7 @@
 			packageProductDependencies = (
 			);
 			productName = teleport;
-			productReference = C2DEAC0C2F96D9FB00CCB832 /* teleport.app */;
+			productReference = C2DEAC0C2F96D9FB00CCB832 /* Teleport.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -253,7 +253,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 9F6NMZV48L;
+				DEVELOPMENT_TEAM = ZTB359LSTB;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -286,7 +286,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 9F6NMZV48L;
+				DEVELOPMENT_TEAM = ZTB359LSTB;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;

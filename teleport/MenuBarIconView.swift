@@ -4,20 +4,19 @@ import SwiftUI
 struct MenuBarIconView: View {
     let phase: ConnectionPhase
     let proxyPhase: ProxyPhase
-    let animationTime: TimeInterval
 
     private var isConnected: Bool {
         phase == .running && proxyPhase == .enabled
     }
 
     var body: some View {
-        iconImage(time: animationTime, animated: isConnected)
+        iconImage(time: 0, animated: false)
     }
 
     private func iconImage(time: TimeInterval, animated: Bool) -> some View {
         Image(nsImage: MenuBarIconImageFactory.image(for: phase, proxyPhase: proxyPhase, time: time, isAnimated: animated))
             .renderingMode(.template)
-            .accessibilityLabel(animated ? "Teleport connected" : "Teleport")
+            .accessibilityLabel(isConnected ? "Teleport connected" : "Teleport")
     }
 }
 
@@ -121,10 +120,10 @@ enum MenuBarIconImageFactory {
 
 #Preview {
     VStack(spacing: 12) {
-        MenuBarIconView(phase: .unconfigured, proxyPhase: .disabled, animationTime: 0)
-        MenuBarIconView(phase: .stopped, proxyPhase: .disabled, animationTime: 0)
-        MenuBarIconView(phase: .running, proxyPhase: .disabled, animationTime: 0)
-        MenuBarIconView(phase: .running, proxyPhase: .enabled, animationTime: Date().timeIntervalSinceReferenceDate)
+        MenuBarIconView(phase: .unconfigured, proxyPhase: .disabled)
+        MenuBarIconView(phase: .stopped, proxyPhase: .disabled)
+        MenuBarIconView(phase: .running, proxyPhase: .disabled)
+        MenuBarIconView(phase: .running, proxyPhase: .enabled)
     }
     .padding()
 }

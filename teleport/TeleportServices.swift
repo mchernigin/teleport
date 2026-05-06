@@ -728,7 +728,8 @@ final class XrayRuntimeManager: @unchecked Sendable {
             }
         }
 
-        connection.start(queue: DispatchQueue.global(qos: .utility))
+        let queue = DispatchQueue(label: "dev.x.teleport.xray-readiness", qos: .userInitiated)
+        connection.start(queue: queue)
         let waitResult = semaphore.wait(timeout: .now() + timeout)
         if waitResult == .timedOut {
             finish(false)
@@ -758,14 +759,17 @@ final class XrayRuntimeManager: @unchecked Sendable {
 final class SystemProxyService: @unchecked Sendable {
     private let processRunner: (Process) throws -> Void
     private let fileManager: FileManager
+    private let commandTimeout: TimeInterval
     private var lastEnabledEndpoint: ProxyEndpoint?
 
     init(
         processRunner: @escaping (Process) throws -> Void = { try $0.run() },
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        commandTimeout: TimeInterval = 5
     ) {
         self.processRunner = processRunner
         self.fileManager = fileManager
+        self.commandTimeout = commandTimeout
     }
 
     func hasSavedProxySnapshot() -> Bool {
@@ -907,43 +911,54 @@ final class SystemProxyService: @unchecked Sendable {
     }
 
     private func restoreWebProxy(_ settings: NetworkProxySettings, service: String) throws {
-        if let server = settings.server, let port = settings.port, !server.isEmpty, port > 0 {
-            try runNetworkSetup(arguments: ["-setwebproxy", service, server, String(port)])
-        }
-        try runNetworkSetup(arguments: ["-setwebproxystate", service, settings.enabled ? "on" : "off"])
+        try restoreProxySettings(settings, service: service, setCommand: "-setwebproxy", stateCommand: "-setwebproxystate")
     }
 
     private func restoreSecureWebProxy(_ settings: NetworkProxySettings, service: String) throws {
-        if let server = settings.server, let port = settings.port, !server.isEmpty, port > 0 {
-            try runNetworkSetup(arguments: ["-setsecurewebproxy", service, server, String(port)])
-        }
-        try runNetworkSetup(arguments: ["-setsecurewebproxystate", service, settings.enabled ? "on" : "off"])
+        try restoreProxySettings(settings, service: service, setCommand: "-setsecurewebproxy", stateCommand: "-setsecurewebproxystate")
     }
 
     private func restoreSOCKSProxy(_ settings: NetworkProxySettings, service: String) throws {
-        if let server = settings.server, let port = settings.port, !server.isEmpty, port > 0 {
-            try runNetworkSetup(arguments: ["-setsocksfirewallproxy", service, server, String(port)])
+        try restoreProxySettings(settings, service: service, setCommand: "-setsocksfirewallproxy", stateCommand: "-setsocksfirewallproxystate")
+    }
+
+    private func restoreProxySettings(_ settings: NetworkProxySettings, service: String, setCommand: String, stateCommand: String) throws {
+        let setArguments = [setCommand, service, settings.server ?? "", String(settings.port ?? 0)]
+        let stateArguments = [stateCommand, service, settings.enabled ? "on" : "off"]
+
+        if settings.enabled {
+            try runNetworkSetup(arguments: setArguments)
+            try runNetworkSetup(arguments: stateArguments)
+        } else {
+            try runNetworkSetup(arguments: stateArguments)
+            try runNetworkSetup(arguments: setArguments)
+            try runNetworkSetup(arguments: stateArguments)
         }
-        try runNetworkSetup(arguments: ["-setsocksfirewallproxystate", service, settings.enabled ? "on" : "off"])
     }
 
     private func disableProxyIfMatching(endpoint: ProxyEndpoint) throws {
         for service in try activeNetworkServices() {
             let webProxy = try readWebProxy(service: service)
             if webProxy.matches(host: endpoint.host, port: endpoint.httpPort) {
-                try runNetworkSetup(arguments: ["-setwebproxystate", service, "off"])
+                try clearProxy(service: service, setCommand: "-setwebproxy", stateCommand: "-setwebproxystate")
             }
 
             let secureWebProxy = try readSecureWebProxy(service: service)
             if secureWebProxy.matches(host: endpoint.host, port: endpoint.httpPort) {
-                try runNetworkSetup(arguments: ["-setsecurewebproxystate", service, "off"])
+                try clearProxy(service: service, setCommand: "-setsecurewebproxy", stateCommand: "-setsecurewebproxystate")
             }
 
             let socksProxy = try readSOCKSProxy(service: service)
             if socksProxy.matches(host: endpoint.host, port: endpoint.socksPort) {
-                try runNetworkSetup(arguments: ["-setsocksfirewallproxystate", service, "off"])
+                try clearProxy(service: service, setCommand: "-setsocksfirewallproxy", stateCommand: "-setsocksfirewallproxystate")
             }
         }
+    }
+
+    private func clearProxy(service: String, setCommand: String, stateCommand: String) throws {
+        try runNetworkSetup(arguments: [stateCommand, service, "off"])
+        try runNetworkSetup(arguments: [setCommand, service, "", "0"])
+        try runNetworkSetup(arguments: [stateCommand, service, "off"])
     }
 
     @discardableResult
@@ -958,7 +973,24 @@ final class SystemProxyService: @unchecked Sendable {
         process.standardError = errorPipe
 
         try processRunner(process)
-        process.waitUntilExit()
+
+        let deadline = Date().addingTimeInterval(commandTimeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+
+        if process.isRunning {
+            process.terminate()
+            let terminationDeadline = Date().addingTimeInterval(0.5)
+            while process.isRunning && Date() < terminationDeadline {
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            process.waitUntilExit()
+            throw ProxyError.commandTimedOut(arguments: arguments)
+        }
 
         let stdout = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         let stderr = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
@@ -1057,6 +1089,7 @@ final class SystemProxyService: @unchecked Sendable {
     enum ProxyError: LocalizedError {
         case authenticatedProxyCannotBePreserved
         case commandFailed(arguments: [String], standardError: String)
+        case commandTimedOut(arguments: [String])
 
         var errorDescription: String? {
             switch self {
@@ -1068,6 +1101,9 @@ final class SystemProxyService: @unchecked Sendable {
                     return "Failed to update system proxy with command: \(command)"
                 }
                 return "Failed to update system proxy with command: \(command)\n\(standardError)"
+            case let .commandTimedOut(arguments):
+                let command = arguments.joined(separator: " ")
+                return "Timed out while updating system proxy with command: \(command)"
             }
         }
     }
@@ -1462,7 +1498,6 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
     @Published private(set) var refreshingHealthConnectionIDs: Set<UUID> = []
     @Published private(set) var queuedHealthConnectionIDs: Set<UUID> = []
-    @Published private(set) var menuBarAnimationTime: TimeInterval = 0
 
     private let parser: ConnectionLinkParser
     private let store: ConfigurationStore
@@ -1477,7 +1512,6 @@ final class AppViewModel: ObservableObject {
     // Full tunnel probes spin up temporary Xray instances; allow a wider fan-out for bulk checks.
     private let healthProbeConcurrencyLimit = 10
     private var autoRefreshTimerCancellable: AnyCancellable?
-    private var menuBarAnimationCancellable: AnyCancellable?
     private var pendingHealthProbeIDs: [UUID] = []
     private var pendingHealthProbeIDSet: Set<UUID> = []
     private var activeHealthProbeTasks: [UUID: Task<Void, Never>] = [:]
@@ -2494,23 +2528,9 @@ final class AppViewModel: ObservableObject {
     }
 
     private func updateMenuBarAnimation() {
-        let shouldAnimate = isConnected
-
-        guard shouldAnimate else {
-            menuBarAnimationCancellable?.cancel()
-            menuBarAnimationCancellable = nil
-            menuBarAnimationTime = 0
-            return
-        }
-
-        guard menuBarAnimationCancellable == nil else { return }
-
-        menuBarAnimationTime = Date().timeIntervalSinceReferenceDate
-        menuBarAnimationCancellable = Timer.publish(every: 1.0 / 24.0, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] now in
-                self?.menuBarAnimationTime = now.timeIntervalSinceReferenceDate
-            }
+        // Animation timing is owned by MenuBarIconView. Keeping this hook avoids
+        // broad call-site churn while preventing high-frequency AppViewModel
+        // publications that re-render the entire menu/settings UI while connected.
     }
 
     private func persistSettingError() {
