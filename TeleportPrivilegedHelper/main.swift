@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 import Security
 
-private let helperVersion = "1"
+private let helperVersion = "2"
 private let helperLabel = "dev.x.teleport.PrivilegedHelper"
 private let socketPath = "/var/run/dev.x.teleport.helper.sock"
 private let installedXrayPath = "/Library/PrivilegedHelperTools/dev.x.teleport.xray"
@@ -13,6 +13,7 @@ struct HelperRequest: Codable {
     var configPath: String?
     var protectedHost: String?
     var tunnelInterfaceName: String?
+    var outboundInterface: String?
     var pid: Int32?
 }
 
@@ -206,6 +207,7 @@ final class XrayTunController {
         let configPath = try required(request.configPath, "configPath")
         let protectedHost = try required(request.protectedHost, "protectedHost")
         let tunnelInterfaceName = try required(request.tunnelInterfaceName, "tunnelInterfaceName")
+        let outboundInterface = request.outboundInterface ?? ""
 
         guard FileManager.default.isExecutableFile(atPath: installedXrayPath) else {
             throw HelperError("Installed Xray runtime is missing. Reinstall Teleport's privileged helper.")
@@ -215,7 +217,8 @@ final class XrayTunController {
             stateDirectoryPath: stateDirectoryPath,
             configPath: configPath,
             protectedHost: protectedHost,
-            tunnelInterfaceName: tunnelInterfaceName
+            tunnelInterfaceName: tunnelInterfaceName,
+            outboundInterface: outboundInterface
         ))
     }
 
@@ -224,7 +227,8 @@ final class XrayTunController {
         try runShell(makeStopScript(
             stateDirectoryPath: stateDirectoryPath,
             pid: request.pid,
-            protectedHost: request.protectedHost
+            protectedHost: request.protectedHost,
+            outboundInterface: request.outboundInterface
         ))
     }
 
@@ -253,7 +257,7 @@ final class XrayTunController {
         }
     }
 
-    private func makeStartScript(stateDirectoryPath: String, configPath: String, protectedHost: String, tunnelInterfaceName: String) -> String {
+    private func makeStartScript(stateDirectoryPath: String, configPath: String, protectedHost: String, tunnelInterfaceName: String, outboundInterface: String) -> String {
         let q = shellQuote
         let pidFile = stateDirectoryPath + "/xray-tun.pid"
         let logFile = stateDirectoryPath + "/xray-tun.log"
@@ -271,6 +275,7 @@ final class XrayTunController {
         CONFIG=\(q(configPath))
         PROTECTED_HOST=\(q(protectedHost))
         TUN_INTERFACE_NAME=\(q(tunnelInterfaceName))
+        OUTBOUND_INTERFACE=\(q(outboundInterface))
 
         \(deleteHostRouteFunction())
 
@@ -399,7 +404,7 @@ final class XrayTunController {
         """
     }
 
-    private func makeStopScript(stateDirectoryPath: String, pid: Int32?, protectedHost: String?) -> String {
+    private func makeStopScript(stateDirectoryPath: String, pid: Int32?, protectedHost: String?, outboundInterface: String?) -> String {
         let q = shellQuote
         let pidFile = stateDirectoryPath + "/xray-tun.pid"
         let protectedHostFile = stateDirectoryPath + "/xray-tun-protected-host"
@@ -407,6 +412,7 @@ final class XrayTunController {
         let sessionStateFile = stateDirectoryPath + "/xray-tun-session.json"
 
         var commands: [String] = []
+        commands.append("OUTBOUND_INTERFACE=\(q(outboundInterface ?? ""))")
         commands.append(deleteHostRouteFunction())
         commands.append("mkdir -p \(q(stateDirectoryPath))")
         commands.append("printf '%s helper stop requested\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\" >> \(q(controlLogFile))")
@@ -436,6 +442,15 @@ final class XrayTunController {
         """
         delete_host_route() {
             host="$1"
+            current_interface=$(route -n get "$host" 2>/dev/null | awk '/interface:/{print $2; exit}' || true)
+            for scoped_interface in "${OUTBOUND_INTERFACE:-}" "$current_interface" en0 en1 en2 bridge100; do
+                [ -n "$scoped_interface" ] || continue
+                i=0
+                while route delete -host -ifscope "$scoped_interface" "$host" >/dev/null 2>&1; do
+                    i=$((i + 1))
+                    [ "$i" -ge 10 ] && break
+                done
+            done
             i=0
             while route delete -host "$host" >/dev/null 2>&1; do
                 i=$((i + 1))

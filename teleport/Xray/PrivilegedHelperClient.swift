@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 struct PrivilegedHelperClient: Sendable {
-    static let expectedVersion = "1"
+    static let expectedVersion = "2"
     static let label = "dev.x.teleport.PrivilegedHelper"
     static let socketPath = "/var/run/dev.x.teleport.helper.sock"
     static let installedToolPath = "/Library/PrivilegedHelperTools/dev.x.teleport.PrivilegedHelper"
@@ -20,18 +20,20 @@ struct PrivilegedHelperClient: Sendable {
             configPath: session.configURL.path,
             protectedHost: session.protectedHost,
             tunnelInterfaceName: session.tunnelInterfaceName,
+            outboundInterface: session.outboundInterface,
             pid: nil
         ))
         try response.validate()
     }
 
-    func stop(paths: XrayTunRuntimePaths, pid: pid_t?, protectedHost: String?) throws {
+    func stop(paths: XrayTunRuntimePaths, pid: pid_t?, protectedHost: String?, outboundInterface: String?) throws {
         let response = try send(PrivilegedHelperRequest(
             command: "stop",
             stateDirectoryPath: paths.stateDirectoryURL.path,
             configPath: nil,
             protectedHost: protectedHost,
             tunnelInterfaceName: nil,
+            outboundInterface: outboundInterface,
             pid: pid
         ))
         try response.validate()
@@ -120,6 +122,7 @@ struct PrivilegedHelperRequest: Codable, Sendable {
     var configPath: String?
     var protectedHost: String?
     var tunnelInterfaceName: String?
+    var outboundInterface: String?
     var pid: Int32?
 
     init(
@@ -128,6 +131,7 @@ struct PrivilegedHelperRequest: Codable, Sendable {
         configPath: String? = nil,
         protectedHost: String? = nil,
         tunnelInterfaceName: String? = nil,
+        outboundInterface: String? = nil,
         pid: Int32? = nil
     ) {
         self.command = command
@@ -135,6 +139,7 @@ struct PrivilegedHelperRequest: Codable, Sendable {
         self.configPath = configPath
         self.protectedHost = protectedHost
         self.tunnelInterfaceName = tunnelInterfaceName
+        self.outboundInterface = outboundInterface
         self.pid = pid
     }
 }

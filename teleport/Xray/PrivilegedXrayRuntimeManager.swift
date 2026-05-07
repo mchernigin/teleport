@@ -63,8 +63,9 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
         let sessionState = readSessionState()
         let pid = sessionState.map(\.pid) ?? readPID()
         let protectedHost = sessionState?.protectedHost ?? readProtectedHost()
+        let outboundInterface = sessionState?.outboundInterface
         do {
-            try helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost)
+            try helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost, outboundInterface: outboundInterface)
         } catch PrivilegedHelperClientError.unavailable(_) where pid == nil && protectedHost == nil {
             return
         } catch PrivilegedHelperClientError.unavailable(_) {
@@ -73,7 +74,7 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
                     throw XrayRuntimeManager.RuntimeError.binaryNotFound
                 }
                 try helperInstaller.ensureInstalled(runtimeURL: runtimeURL)
-                try helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost)
+                try helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost, outboundInterface: outboundInterface)
             } catch {
                 throw XrayTunRuntimeError.stopFailed(summary: readableSummary(from: error), details: diagnosticDetails(from: error))
             }
@@ -83,13 +84,17 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
     }
 
     func cleanupIfHelperAvailable(protectedHost fallbackProtectedHost: String? = nil) {
+        if let runtimeURL = runtimeURL() {
+            try? helperInstaller.ensureInstalled(runtimeURL: runtimeURL)
+        }
         guard let response = try? helperClient.status(), response.success else {
             return
         }
         let sessionState = readSessionState()
         let pid = sessionState.map(\.pid) ?? readPID()
         let protectedHost = sessionState?.protectedHost ?? readProtectedHost() ?? fallbackProtectedHost
-        try? helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost)
+        let outboundInterface = sessionState?.outboundInterface
+        try? helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost, outboundInterface: outboundInterface)
     }
 
     func teardown() {
