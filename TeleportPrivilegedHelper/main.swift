@@ -2,10 +2,10 @@ import Foundation
 import Darwin
 import Security
 
-private let helperVersion = "4"
-private let helperLabel = "dev.x.teleport.PrivilegedHelper"
-private let socketPath = "/var/run/dev.x.teleport.helper.sock"
-private let installedXrayPath = "/Library/PrivilegedHelperTools/dev.x.teleport.xray"
+private let helperVersion = PrivilegedHelperConstants.version
+private let helperLabel = PrivilegedHelperConstants.label
+private let socketPath = PrivilegedHelperConstants.socketPath
+private let installedXrayPath = PrivilegedHelperConstants.installedXrayPath
 
 struct HelperRequest: Codable {
     var command: String

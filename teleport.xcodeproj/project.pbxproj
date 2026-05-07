@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		C2F100032F98000000CCB832 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2F100012F98000000CCB832 /* main.swift */; };
+		C2F100102F98000000CCB832 /* PrivilegedHelperConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2F1000F2F98000000CCB832 /* PrivilegedHelperConstants.swift */; };
+		C2F100112F98000000CCB832 /* PrivilegedHelperConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2F1000F2F98000000CCB832 /* PrivilegedHelperConstants.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -23,6 +25,7 @@
 /* Begin PBXFileReference section */
 		C2DEAC0C2F96D9FB00CCB832 /* Teleport.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Teleport.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C2F100012F98000000CCB832 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		C2F1000F2F98000000CCB832 /* PrivilegedHelperConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivilegedHelperConstants.swift; sourceTree = "<group>"; };
 		C2F100022F98000000CCB832 /* dev.x.teleport.PrivilegedHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = dev.x.teleport.PrivilegedHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -57,6 +60,7 @@
 			children = (
 				C2DEAC0E2F96D9FB00CCB832 /* teleport */,
 				C2F1000A2F98000000CCB832 /* TeleportPrivilegedHelper */,
+				C2F1000E2F98000000CCB832 /* Shared */,
 				C2DEAC0D2F96D9FB00CCB832 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -68,6 +72,14 @@
 				C2F100022F98000000CCB832 /* dev.x.teleport.PrivilegedHelper */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C2F1000E2F98000000CCB832 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				C2F1000F2F98000000CCB832 /* PrivilegedHelperConstants.swift */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 		C2F1000A2F98000000CCB832 /* TeleportPrivilegedHelper */ = {
@@ -97,6 +109,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				C2DEAC0E2F96D9FB00CCB832 /* teleport */,
+				C2F1000E2F98000000CCB832 /* Shared */,
 			);
 			name = teleport;
 			packageProductDependencies = (
@@ -199,6 +212,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C2F100112F98000000CCB832 /* PrivilegedHelperConstants.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -207,6 +221,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C2F100032F98000000CCB832 /* main.swift in Sources */,
+				C2F100102F98000000CCB832 /* PrivilegedHelperConstants.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
