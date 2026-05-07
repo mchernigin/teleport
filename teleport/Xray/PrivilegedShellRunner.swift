@@ -1,28 +1,28 @@
 import Foundation
 
 struct PrivilegedShellRunner: Sendable {
-    func runAdministratorShellScript(_ shellScript: String) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = [
-            "-e",
-            "do shell script \"\(Self.appleScriptQuote(shellScript))\" with administrator privileges"
-        ]
+    func runAdministratorShellScript(_ shellScript: String, prompt: String? = nil) throws {
+        var appleScript = "do shell script \"\(Self.appleScriptQuote(shellScript))\" with administrator privileges"
+        if let prompt, !prompt.isEmpty {
+            appleScript += " with prompt \"\(Self.appleScriptQuote(prompt))\""
+        }
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        guard let script = NSAppleScript(source: appleScript) else {
+            throw PrivilegedShellError.commandFailed("Failed to prepare administrator prompt")
+        }
 
-        try process.run()
-        process.waitUntilExit()
+        var errorInfo: NSDictionary?
+        script.executeAndReturnError(&errorInfo)
 
-        guard process.terminationStatus == 0 else {
-            let stdout = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let stderr = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let message = [stderr, stdout].filter { !$0.isEmpty }.joined(separator: "\n")
+        if let errorInfo {
+            let message = [
+                errorInfo[NSAppleScript.errorMessage] as? String,
+                errorInfo[NSAppleScript.errorBriefMessage] as? String
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+
             throw PrivilegedShellError.commandFailed(message)
         }
     }

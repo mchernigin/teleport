@@ -38,7 +38,7 @@ struct PrivilegedHelperInstaller: Sendable {
         let plist = launchDaemonPlist()
         let script = installScript(helperURL: helperURL, runtimeURL: runtimeURL, plist: plist)
         do {
-            try shellRunner.runAdministratorShellScript(script)
+            try shellRunner.runAdministratorShellScript(script, prompt: administratorPrompt)
         } catch {
             throw PrivilegedHelperInstallerError.installFailed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
@@ -70,6 +70,14 @@ struct PrivilegedHelperInstaller: Sendable {
         throw PrivilegedHelperInstallerError.helperDidNotStart(
             (lastError as? LocalizedError)?.errorDescription ?? lastError?.localizedDescription
         )
+    }
+
+    private var administratorPrompt: String {
+        """
+        Teleport needs administrator access to install or update its privileged helper for VPN mode.
+
+        The helper lets Teleport start and stop Xray TUN and configure system routing. Your password is only used by macOS to approve this privileged install.
+        """
     }
 
     private func installScript(helperURL: URL, runtimeURL: URL, plist: String) -> String {

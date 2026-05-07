@@ -122,10 +122,10 @@ private struct NerdShitSettingsView: View {
 
     private var logSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Xray logs")
-                    .font(.headline)
+            Text("Xray logs")
+                .font(.headline)
 
+            HStack(spacing: 10) {
                 Picker("Log", selection: $selectedLog) {
                     ForEach(NerdLogFile.allCases) { logFile in
                         Text(logFile.title).tag(logFile)
@@ -133,41 +133,43 @@ private struct NerdShitSettingsView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 360)
+                .frame(maxWidth: 460, alignment: .leading)
 
-                Spacer()
+                Spacer(minLength: 8)
 
-                Button("Refresh") {
-                    refreshLog()
+                Menu {
+                    Button("Refresh") {
+                        refreshLog()
+                    }
+
+                    Button("Copy Log") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(logText, forType: .string)
+                    }
+                    .disabled(logText.isEmpty)
+
+                    Button("Open Logs Folder") {
+                        NSWorkspace.shared.open(NerdLogFile.applicationSupportDirectoryURL)
+                    }
+                } label: {
+                    Label("Actions", systemImage: "ellipsis.circle")
                 }
-
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(logText, forType: .string)
-                }
-                .disabled(logText.isEmpty)
-
-                Button("Open Folder") {
-                    NSWorkspace.shared.open(NerdLogFile.applicationSupportDirectoryURL)
-                }
+                .fixedSize()
             }
 
             Text(logMetadata)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
 
-            ScrollView {
-                Text(logText.isEmpty ? "No log output yet." : logText)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(10)
-            }
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-            )
+            LogTextViewer(text: logText)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                )
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -225,6 +227,67 @@ private struct NerdShitSettingsView: View {
         formatter.timeStyle = .medium
         return formatter
     }()
+}
+
+private struct LogTextViewer: NSViewRepresentable {
+    let text: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .textBackgroundColor
+
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.usesFindBar = true
+        textView.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        textView.textColor = .labelColor
+        textView.backgroundColor = .textBackgroundColor
+        textView.textContainerInset = NSSize(width: 10, height: 10)
+        textView.isHorizontallyResizable = true
+        textView.isVerticallyResizable = true
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.string = displayText
+
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = context.coordinator.textView else { return }
+        let nextText = displayText
+        guard textView.string != nextText else { return }
+
+        let visibleRect = scrollView.contentView.bounds
+        textView.string = nextText
+        textView.scrollToVisible(visibleRect)
+    }
+
+    private var displayText: String {
+        text.isEmpty ? "No log output yet." : text
+    }
+
+    final class Coordinator {
+        weak var textView: NSTextView?
+    }
 }
 
 private enum NerdLogFile: String, CaseIterable, Identifiable, Hashable {
