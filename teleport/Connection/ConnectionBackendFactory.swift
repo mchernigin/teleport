@@ -11,7 +11,8 @@ struct ConnectionBackendFactory {
         case .vpn:
             return XrayTunConnectionBackend(
                 runtimeManager: PrivilegedXrayRuntimeManager(),
-                routeInspector: XrayTunRouteInspector()
+                routeInspector: XrayTunRouteInspector(),
+                systemProxyService: SystemProxyService()
             )
         }
     }
@@ -20,10 +21,12 @@ struct ConnectionBackendFactory {
 final class XrayTunConnectionBackend: ConnectionBackend {
     private let runtimeManager: PrivilegedXrayRuntimeManager
     private let routeInspector: XrayTunRouteInspector
+    private let systemProxyService: SystemProxyService
 
-    init(runtimeManager: PrivilegedXrayRuntimeManager, routeInspector: XrayTunRouteInspector) {
+    init(runtimeManager: PrivilegedXrayRuntimeManager, routeInspector: XrayTunRouteInspector, systemProxyService: SystemProxyService) {
         self.runtimeManager = runtimeManager
         self.routeInspector = routeInspector
+        self.systemProxyService = systemProxyService
     }
 
     func hasRestorableState() -> Bool { false }
@@ -35,6 +38,8 @@ final class XrayTunConnectionBackend: ConnectionBackend {
         if let existingVPNInterface = routeInspector.existingVPNDefaultRouteInterface() {
             throw XrayTunConnectionError.existingVPNDetected(existingVPNInterface)
         }
+
+        try systemProxyService.disableProxy()
 
         let outboundInterface = routeInspector.outboundInterface(for: configuration.host) ?? "auto"
         let tunnelInterfaceName = routeInspector.randomTunnelInterfaceName()
