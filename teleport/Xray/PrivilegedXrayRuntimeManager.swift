@@ -82,13 +82,13 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
         }
     }
 
-    func cleanupIfHelperAvailable() {
+    func cleanupIfHelperAvailable(protectedHost fallbackProtectedHost: String? = nil) {
         guard let response = try? helperClient.status(), response.success else {
             return
         }
         let sessionState = readSessionState()
         let pid = sessionState.map(\.pid) ?? readPID()
-        let protectedHost = sessionState?.protectedHost ?? readProtectedHost()
+        let protectedHost = sessionState?.protectedHost ?? readProtectedHost() ?? fallbackProtectedHost
         try? helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost)
     }
 

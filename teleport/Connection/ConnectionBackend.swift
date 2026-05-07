@@ -34,7 +34,7 @@ final class SystemProxyConnectionBackend: ConnectionBackend {
 
     func start(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint) throws {
         do {
-            vpnRuntimeManager?.cleanupIfHelperAvailable()
+            vpnRuntimeManager?.cleanupIfHelperAvailable(protectedHost: configuration.host)
             try startRuntime(configuration: configuration, endpoint: endpoint)
             try proxyService.enableProxy(endpoint: endpoint)
         } catch {
@@ -51,7 +51,7 @@ final class SystemProxyConnectionBackend: ConnectionBackend {
             }
 
             runtimeManager.stop()
-            vpnRuntimeManager?.cleanupIfHelperAvailable()
+            vpnRuntimeManager?.cleanupIfHelperAvailable(protectedHost: configuration.host)
             try startRuntime(configuration: configuration, endpoint: endpoint)
             try proxyService.enableProxy(endpoint: endpoint)
         } catch {

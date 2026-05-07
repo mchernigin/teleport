@@ -272,6 +272,8 @@ final class XrayTunController {
         PROTECTED_HOST=\(q(protectedHost))
         TUN_INTERFACE_NAME=\(q(tunnelInterfaceName))
 
+        \(deleteHostRouteFunction())
+
         mkdir -p "$STATE_DIR"
         printf '%s helper start requested for %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$PROTECTED_HOST" >> "$CONTROL_LOG_FILE"
 
@@ -287,7 +289,7 @@ final class XrayTunController {
         if [ -f "$PROTECTED_HOST_FILE" ]; then
             old_protected_host=$(cat "$PROTECTED_HOST_FILE" 2>/dev/null || true)
             if [ -n "$old_protected_host" ]; then
-                route delete -host "$old_protected_host" >/dev/null 2>&1 || true
+                delete_host_route "$old_protected_host"
             fi
         fi
 
@@ -298,6 +300,7 @@ final class XrayTunController {
         : > "$LOG_FILE"
         printf '%s\n' "$PROTECTED_HOST" > "$PROTECTED_HOST_FILE"
 
+        delete_host_route "$PROTECTED_HOST"
         gateway=$(route -n get "$PROTECTED_HOST" 2>/dev/null | awk '/gateway:/{print $2; exit}')
         \(protectHostRouteCommands())
 
@@ -315,7 +318,7 @@ final class XrayTunController {
 
         if ! kill -0 "$pid" >/dev/null 2>&1; then
             printf '%s pid %s exited during readiness wait\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$pid" >> "$CONTROL_LOG_FILE"
-            route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
+            delete_host_route "$PROTECTED_HOST"
             rm -f "$PID_FILE"
             cat "$LOG_FILE" >&2 || true
             exit 1
@@ -341,7 +344,7 @@ final class XrayTunController {
             kill "$pid" 2>/dev/null || true
             sleep 0.5
             kill -9 "$pid" 2>/dev/null || true
-            route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
+            delete_host_route "$PROTECTED_HOST"
             rm -f "$PID_FILE"
             exit 1
         fi
@@ -369,7 +372,7 @@ final class XrayTunController {
                 kill -9 "$pid" 2>/dev/null || true
                 route delete -net 0.0.0.0/1 >/dev/null 2>&1 || true
                 route delete -net 128.0.0.0/1 >/dev/null 2>&1 || true
-                route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
+                delete_host_route "$PROTECTED_HOST"
                 rm -f "$PID_FILE"
                 exit 1
                 ;;
@@ -385,7 +388,7 @@ final class XrayTunController {
                 kill -9 "$pid" 2>/dev/null || true
                 route delete -net 0.0.0.0/1 >/dev/null 2>&1 || true
                 route delete -net 128.0.0.0/1 >/dev/null 2>&1 || true
-                route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
+                delete_host_route "$PROTECTED_HOST"
                 rm -f "$PID_FILE"
                 exit 1
                 ;;
@@ -404,6 +407,7 @@ final class XrayTunController {
         let sessionStateFile = stateDirectoryPath + "/xray-tun-session.json"
 
         var commands: [String] = []
+        commands.append(deleteHostRouteFunction())
         commands.append("mkdir -p \(q(stateDirectoryPath))")
         commands.append("printf '%s helper stop requested\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\" >> \(q(controlLogFile))")
         if let pid {
@@ -412,9 +416,9 @@ final class XrayTunController {
             commands.append("if [ -f \(q(pidFile)) ]; then pid=$(cat \(q(pidFile)) 2>/dev/null || true); if [ -n \"$pid\" ]; then kill \"$pid\" 2>/dev/null || true; for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 \"$pid\" 2>/dev/null || break; sleep 0.2; done; kill -0 \"$pid\" 2>/dev/null && kill -9 \"$pid\" 2>/dev/null || true; fi; fi")
         }
         if let protectedHost, !protectedHost.isEmpty {
-            commands.append("route delete -host \(q(protectedHost)) >/dev/null 2>&1 || true")
+            commands.append("delete_host_route \(q(protectedHost))")
         } else {
-            commands.append("if [ -f \(q(protectedHostFile)) ]; then protected_host=$(cat \(q(protectedHostFile)) 2>/dev/null || true); if [ -n \"$protected_host\" ]; then route delete -host \"$protected_host\" >/dev/null 2>&1 || true; fi; fi")
+            commands.append("if [ -f \(q(protectedHostFile)) ]; then protected_host=$(cat \(q(protectedHostFile)) 2>/dev/null || true); if [ -n \"$protected_host\" ]; then delete_host_route \"$protected_host\"; fi; fi")
         }
         commands.append("route delete -net 0.0.0.0/1 >/dev/null 2>&1 || true")
         commands.append("route delete -net 128.0.0.0/1 >/dev/null 2>&1 || true")
@@ -428,14 +432,23 @@ final class XrayTunController {
         "kill \(pid) 2>/dev/null || true; for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 \(pid) 2>/dev/null || break; sleep 0.2; done; kill -0 \(pid) 2>/dev/null && kill -9 \(pid) 2>/dev/null || true"
     }
 
-    private func protectHostRouteCommands() -> String {
+    private func deleteHostRouteFunction() -> String {
         """
-        if [ -n "$gateway" ]; then
+        delete_host_route() {
+            host="$1"
             i=0
-            while route delete -host "$PROTECTED_HOST" >/dev/null 2>&1; do
+            while route delete -host "$host" >/dev/null 2>&1; do
                 i=$((i + 1))
                 [ "$i" -ge 10 ] && break
             done
+        }
+        """
+    }
+
+    private func protectHostRouteCommands() -> String {
+        """
+        if [ -n "$gateway" ]; then
+            delete_host_route "$PROTECTED_HOST"
             route add -host "$PROTECTED_HOST" "$gateway" >> "$CONTROL_LOG_FILE" 2>&1 || route change -host "$PROTECTED_HOST" "$gateway" >> "$CONTROL_LOG_FILE" 2>&1 || true
         fi
         """
