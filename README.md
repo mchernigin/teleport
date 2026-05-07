@@ -46,6 +46,7 @@ The helper accepts commands only from the active console user and verifies the T
 Runtime diagnostics for VPN mode are written under:
 
 ```text
+~/Library/Application Support/teleport/xray.log
 ~/Library/Application Support/teleport/xray-tun.log
 ~/Library/Application Support/teleport/xray-tun-control.log
 ~/Library/Application Support/teleport/xray-tun-session.json

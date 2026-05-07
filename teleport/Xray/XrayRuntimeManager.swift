@@ -9,6 +9,7 @@ import SystemConfiguration
 final class XrayRuntimeManager: @unchecked Sendable {
     private var process: Process?
     private var errorPipe: Pipe?
+    private var logFileHandle: FileHandle?
     private let bundle: Bundle
     private let errorBufferLock = NSLock()
     private var errorBuffer = Data()
@@ -41,6 +42,7 @@ final class XrayRuntimeManager: @unchecked Sendable {
         process.environment = environment
 
         let pipe = Pipe()
+        let logFileHandle = try makeLogFileHandle()
         errorBufferLock.lock()
         errorBuffer = Data()
         errorBufferLock.unlock()
@@ -51,11 +53,13 @@ final class XrayRuntimeManager: @unchecked Sendable {
             self.errorBufferLock.lock()
             self.errorBuffer.append(data)
             self.errorBufferLock.unlock()
+            self.logFileHandle?.write(data)
         }
 
         process.standardError = pipe
-        process.standardOutput = Pipe()
+        process.standardOutput = pipe
         errorPipe = pipe
+        self.logFileHandle = logFileHandle
 
         try process.run()
         self.process = process
@@ -118,6 +122,19 @@ final class XrayRuntimeManager: @unchecked Sendable {
     private func cleanupPipe() {
         errorPipe?.fileHandleForReading.readabilityHandler = nil
         errorPipe = nil
+        try? logFileHandle?.close()
+        logFileHandle = nil
+    }
+
+    private func makeLogFileHandle() throws -> FileHandle {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("teleport", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let logURL = directory.appendingPathComponent("xray.log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: logURL)
+        try handle.truncate(atOffset: 0)
+        return handle
     }
 
     private func assetDirectoryURL() -> URL? {
