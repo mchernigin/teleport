@@ -55,7 +55,7 @@ struct XrayConfigurationWriter {
 
         return [
             "log": [
-                "loglevel": "debug"
+                "loglevel": "warning"
             ],
             "inbounds": [
                 [
@@ -104,7 +104,7 @@ struct XrayConfigurationWriter {
 
         return [
             "log": [
-                "loglevel": "debug"
+                "loglevel": "warning"
             ],
             "inbounds": [
                 [
