@@ -323,31 +323,37 @@ final class XrayTunController {
         printf '%s\n' "$pid" > "$PID_FILE"
         printf '%s helper launched pid %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$pid" >> "$CONTROL_LOG_FILE"
 
-        sleep 2
-        \(protectHostRouteCommands())
-        protect_dns_routes
-
-        if ! kill -0 "$pid" >/dev/null 2>&1; then
-            printf '%s pid %s exited during readiness wait\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$pid" >> "$CONTROL_LOG_FILE"
-            delete_host_route "$PROTECTED_HOST"
-            cleanup_dns_routes
-            rm -f "$PID_FILE"
-            cat "$LOG_FILE" >&2 || true
-            exit 1
-        fi
-
         tun_interface=""
-        if ifconfig "$TUN_INTERFACE_NAME" >/dev/null 2>&1; then
-            tun_interface="$TUN_INTERFACE_NAME"
-        fi
-        if [ -z "$tun_interface" ]; then
-            tun_interface=$(ifconfig | awk '
-                /^utun[0-9]+:/ { iface=$1; sub(":", "", iface); next }
-                /inet 169\\.254\\./ { print iface; exit }
-                /inet 172\\.18\\.0\\.1/ { print iface; exit }
-                /inet 198\\.18\\./ { print iface; exit }
-            ')
-        fi
+        readiness_attempt=0
+        while [ -z "$tun_interface" ] && [ "$readiness_attempt" -lt 20 ]; do
+            sleep 0.5
+            readiness_attempt=$((readiness_attempt + 1))
+
+            \(protectHostRouteCommands())
+            protect_dns_routes
+
+            if ! kill -0 "$pid" >/dev/null 2>&1; then
+                printf '%s pid %s exited during readiness wait\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$pid" >> "$CONTROL_LOG_FILE"
+                delete_host_route "$PROTECTED_HOST"
+                cleanup_dns_routes
+                rm -f "$PID_FILE"
+                cat "$LOG_FILE" >&2 || true
+                exit 1
+            fi
+
+            if ifconfig "$TUN_INTERFACE_NAME" >/dev/null 2>&1; then
+                tun_interface="$TUN_INTERFACE_NAME"
+            fi
+            if [ -z "$tun_interface" ]; then
+                tun_interface=$(ifconfig | awk '
+                    /^utun[0-9]+:/ { iface=$1; sub(":", "", iface); next }
+                    /inet 169\\.254\\./ { print iface; exit }
+                    /inet 172\\.18\\.0\\.1/ { print iface; exit }
+                    /inet 198\\.18\\./ { print iface; exit }
+                ')
+            fi
+        done
+
         if [ -z "$tun_interface" ]; then
             reason="Teleport VPN started Xray, but macOS did not create a TUN interface."
             printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$reason" >> "$CONTROL_LOG_FILE"
