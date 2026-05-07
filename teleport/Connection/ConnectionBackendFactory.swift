@@ -42,7 +42,7 @@ final class XrayTunConnectionBackend: ConnectionBackend {
         try systemProxyService.disableProxy()
 
         let outboundInterface = routeInspector.outboundInterface(for: configuration.host) ?? "auto"
-        let tunnelInterfaceName = routeInspector.randomTunnelInterfaceName()
+        let tunnelInterfaceName = routeInspector.tunnelInterfaceName()
         let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeTunnelConfig(
             for: configuration,
             interfaceName: tunnelInterfaceName,

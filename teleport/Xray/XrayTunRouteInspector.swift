@@ -59,7 +59,7 @@ struct XrayTunRouteInspector: Sendable {
             .map(String.init)
     }
 
-    func randomTunnelInterfaceName() -> String {
-        "utun\(Int.random(in: 10 ... 99))"
+    func tunnelInterfaceName() -> String {
+        "utun"
     }
 }

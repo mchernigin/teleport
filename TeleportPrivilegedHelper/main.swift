@@ -349,7 +349,7 @@ final class XrayTunController {
             ')
         fi
         if [ -z "$tun_interface" ]; then
-            reason="Teleport VPN started Xray, but macOS did not create the expected TUN interface $TUN_INTERFACE_NAME."
+            reason="Teleport VPN started Xray, but macOS did not create a TUN interface."
             printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$reason" >> "$CONTROL_LOG_FILE"
             ifconfig >> "$CONTROL_LOG_FILE" 2>&1 || true
             printf '%s\n' "$reason" >&2
