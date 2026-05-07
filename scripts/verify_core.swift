@@ -26,7 +26,7 @@ struct VerifyCore {
         precondition(configuration.security == .tls)
         precondition(configuration.vlessUserID == "123e4567-e89b-12d3-a456-426614174000")
 
-        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration)
+        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration, to: temporaryConfigURL())
         let content = try String(contentsOf: configURL, encoding: .utf8)
         precondition(content.contains("\"protocol\" : \"vless\""))
         precondition(content.contains("example.com"))
@@ -36,7 +36,7 @@ struct VerifyCore {
         let realityConfiguration = try parser.parse(realityLink)
         precondition(realityConfiguration.vlessFlow == "xtls-rprx-vision")
 
-        let realityConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: realityConfiguration)
+        let realityConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: realityConfiguration, to: temporaryConfigURL())
         let realityContent = try String(contentsOf: realityConfigURL, encoding: .utf8)
         precondition(realityContent.contains("xtls-rprx-vision"))
     }
@@ -49,7 +49,7 @@ struct VerifyCore {
         precondition(grpcConfiguration.transport == .grpc)
         precondition(grpcConfiguration.grpcServiceName == "teleport-grpc")
 
-        let grpcConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: grpcConfiguration)
+        let grpcConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: grpcConfiguration, to: temporaryConfigURL())
         let grpcContent = try String(contentsOf: grpcConfigURL, encoding: .utf8)
         precondition(grpcContent.contains("\"network\" : \"grpc\""))
         precondition(grpcContent.contains("grpcSettings"))
@@ -61,7 +61,7 @@ struct VerifyCore {
         precondition(xhttpConfiguration.path == "/edge")
         precondition(xhttpConfiguration.transportMode == "auto")
 
-        let xhttpConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: xhttpConfiguration)
+        let xhttpConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: xhttpConfiguration, to: temporaryConfigURL())
         let xhttpContent = try String(contentsOf: xhttpConfigURL, encoding: .utf8)
         precondition(xhttpContent.contains("\"network\" : \"xhttp\""))
         precondition(xhttpContent.contains("xhttpSettings"))
@@ -72,7 +72,7 @@ struct VerifyCore {
         precondition(rawConfiguration.transport == .raw)
         precondition(rawConfiguration.security == .none)
 
-        let rawConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: rawConfiguration)
+        let rawConfigURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: rawConfiguration, to: temporaryConfigURL())
         let rawContent = try String(contentsOf: rawConfigURL, encoding: .utf8)
         precondition(rawContent.contains("\"network\" : \"raw\""))
     }
@@ -90,7 +90,7 @@ struct VerifyCore {
         precondition(configuration.trojanPassword == "secret-password")
         precondition(configuration.hostHeader == "cdn.example.com")
 
-        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration)
+        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration, to: temporaryConfigURL())
         let content = try String(contentsOf: configURL, encoding: .utf8)
         precondition(content.contains("\"protocol\" : \"trojan\""))
         precondition(content.contains("secret-password"))
@@ -110,7 +110,7 @@ struct VerifyCore {
         precondition(configuration.publicKey == "abc123abc123abc123abc123abc123abc123abc123")
         precondition(configuration.shortID == "a1b2c3d4")
 
-        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration)
+        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration, to: temporaryConfigURL())
         let content = try String(contentsOf: configURL, encoding: .utf8)
         precondition(content.contains("\"protocol\" : \"trojan\""))
         precondition(content.contains("\"security\" : \"reality\""))
@@ -127,7 +127,7 @@ struct VerifyCore {
         precondition(configuration.transport == .grpc)
         precondition(configuration.grpcServiceName == "teleport-trojan")
 
-        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration)
+        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration, to: temporaryConfigURL())
         let content = try String(contentsOf: configURL, encoding: .utf8)
         precondition(content.contains("\"protocol\" : \"trojan\""))
         precondition(content.contains("\"network\" : \"grpc\""))
@@ -251,7 +251,7 @@ struct VerifyCore {
     private static func testRuntimeStartupFailureWithoutBundledBinary() throws {
         let parser = ConnectionLinkParser()
         let configuration = try parser.parse("vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls&type=tcp&sni=example.com")
-        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration)
+        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeConfig(for: configuration, to: temporaryConfigURL())
         let runtimeManager = XrayRuntimeManager(bundle: .main)
 
         do {
@@ -265,6 +265,12 @@ struct VerifyCore {
                 fatalError("Expected binaryNotFound")
             }
         }
+    }
+
+    private static func temporaryConfigURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("teleport-verify-\(UUID().uuidString)")
+            .appendingPathExtension("json")
     }
 
 }
