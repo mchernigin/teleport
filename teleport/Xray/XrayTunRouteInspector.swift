@@ -59,7 +59,39 @@ struct XrayTunRouteInspector: Sendable {
             .map(String.init)
     }
 
-    func tunnelInterfaceName() -> String {
-        "utun"
+    func nextAvailableTunnelInterfaceName() -> String {
+        let existingIndexes = existingTunnelInterfaceIndexes()
+        let startIndex = 10
+        let endIndex = 199
+        for index in startIndex ... endIndex where !existingIndexes.contains(index) {
+            return "utun\(index)"
+        }
+        return "utun\(endIndex + 1)"
+    }
+
+    private func existingTunnelInterfaceIndexes() -> Set<Int> {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/sbin/ifconfig")
+        process.arguments = ["-l"]
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return []
+        }
+
+        guard process.terminationStatus == 0 else { return [] }
+        let output = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        return Set(output
+            .split(separator: " ")
+            .compactMap { name -> Int? in
+                guard name.hasPrefix("utun") else { return nil }
+                return Int(name.dropFirst(4))
+            })
     }
 }
