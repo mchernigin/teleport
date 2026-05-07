@@ -315,6 +315,7 @@ final class XrayTunController {
 
         if ! kill -0 "$pid" >/dev/null 2>&1; then
             printf '%s pid %s exited during readiness wait\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$pid" >> "$CONTROL_LOG_FILE"
+            route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
             rm -f "$PID_FILE"
             cat "$LOG_FILE" >&2 || true
             exit 1
@@ -340,6 +341,7 @@ final class XrayTunController {
             kill "$pid" 2>/dev/null || true
             sleep 0.5
             kill -9 "$pid" 2>/dev/null || true
+            route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
             rm -f "$PID_FILE"
             exit 1
         fi
@@ -367,6 +369,7 @@ final class XrayTunController {
                 kill -9 "$pid" 2>/dev/null || true
                 route delete -net 0.0.0.0/1 >/dev/null 2>&1 || true
                 route delete -net 128.0.0.0/1 >/dev/null 2>&1 || true
+                route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
                 rm -f "$PID_FILE"
                 exit 1
                 ;;
@@ -382,6 +385,7 @@ final class XrayTunController {
                 kill -9 "$pid" 2>/dev/null || true
                 route delete -net 0.0.0.0/1 >/dev/null 2>&1 || true
                 route delete -net 128.0.0.0/1 >/dev/null 2>&1 || true
+                route delete -host "$PROTECTED_HOST" >/dev/null 2>&1 || true
                 rm -f "$PID_FILE"
                 exit 1
                 ;;

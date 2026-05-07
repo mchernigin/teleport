@@ -12,10 +12,16 @@ protocol ConnectionBackend: AnyObject {
 final class SystemProxyConnectionBackend: ConnectionBackend {
     private let runtimeManager: XrayRuntimeManager
     private let proxyService: SystemProxyService
+    private let vpnRuntimeManager: PrivilegedXrayRuntimeManager?
 
-    init(runtimeManager: XrayRuntimeManager, proxyService: SystemProxyService) {
+    init(
+        runtimeManager: XrayRuntimeManager,
+        proxyService: SystemProxyService,
+        vpnRuntimeManager: PrivilegedXrayRuntimeManager? = PrivilegedXrayRuntimeManager()
+    ) {
         self.runtimeManager = runtimeManager
         self.proxyService = proxyService
+        self.vpnRuntimeManager = vpnRuntimeManager
     }
 
     func hasRestorableState() -> Bool {
@@ -28,6 +34,7 @@ final class SystemProxyConnectionBackend: ConnectionBackend {
 
     func start(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint) throws {
         do {
+            vpnRuntimeManager?.cleanupIfHelperAvailable()
             try startRuntime(configuration: configuration, endpoint: endpoint)
             try proxyService.enableProxy(endpoint: endpoint)
         } catch {
@@ -44,6 +51,7 @@ final class SystemProxyConnectionBackend: ConnectionBackend {
             }
 
             runtimeManager.stop()
+            vpnRuntimeManager?.cleanupIfHelperAvailable()
             try startRuntime(configuration: configuration, endpoint: endpoint)
             try proxyService.enableProxy(endpoint: endpoint)
         } catch {
