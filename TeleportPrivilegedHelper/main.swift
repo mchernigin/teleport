@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 import Security
 
-private let helperVersion = "2"
+private let helperVersion = "3"
 private let helperLabel = "dev.x.teleport.PrivilegedHelper"
 private let socketPath = "/var/run/dev.x.teleport.helper.sock"
 private let installedXrayPath = "/Library/PrivilegedHelperTools/dev.x.teleport.xray"
@@ -262,6 +262,7 @@ final class XrayTunController {
         let pidFile = stateDirectoryPath + "/xray-tun.pid"
         let logFile = stateDirectoryPath + "/xray-tun.log"
         let protectedHostFile = stateDirectoryPath + "/xray-tun-protected-host"
+        let protectedDNSFile = stateDirectoryPath + "/xray-tun-protected-dns"
         let controlLogFile = stateDirectoryPath + "/xray-tun-control.log"
 
         return """
@@ -270,6 +271,7 @@ final class XrayTunController {
         PID_FILE=\(q(pidFile))
         LOG_FILE=\(q(logFile))
         PROTECTED_HOST_FILE=\(q(protectedHostFile))
+        PROTECTED_DNS_FILE=\(q(protectedDNSFile))
         CONTROL_LOG_FILE=\(q(controlLogFile))
         XRAY=\(q(installedXrayPath))
         CONFIG=\(q(configPath))
@@ -278,6 +280,7 @@ final class XrayTunController {
         OUTBOUND_INTERFACE=\(q(outboundInterface))
 
         \(deleteHostRouteFunction())
+        \(dnsRouteFunctions())
 
         mkdir -p "$STATE_DIR"
         printf '%s helper start requested for %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$PROTECTED_HOST" >> "$CONTROL_LOG_FILE"
@@ -297,6 +300,7 @@ final class XrayTunController {
                 delete_host_route "$old_protected_host"
             fi
         fi
+        cleanup_dns_routes
 
         route delete -net 0.0.0.0/1 >/dev/null 2>&1 || true
         route delete -net 128.0.0.0/1 >/dev/null 2>&1 || true
@@ -308,6 +312,7 @@ final class XrayTunController {
         delete_host_route "$PROTECTED_HOST"
         gateway=$(route -n get "$PROTECTED_HOST" 2>/dev/null | awk '/gateway:/{print $2; exit}')
         \(protectHostRouteCommands())
+        protect_dns_routes
 
         cd "$STATE_DIR"
         (
@@ -320,10 +325,12 @@ final class XrayTunController {
 
         sleep 2
         \(protectHostRouteCommands())
+        protect_dns_routes
 
         if ! kill -0 "$pid" >/dev/null 2>&1; then
             printf '%s pid %s exited during readiness wait\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$pid" >> "$CONTROL_LOG_FILE"
             delete_host_route "$PROTECTED_HOST"
+            cleanup_dns_routes
             rm -f "$PID_FILE"
             cat "$LOG_FILE" >&2 || true
             exit 1
@@ -350,6 +357,7 @@ final class XrayTunController {
             sleep 0.5
             kill -9 "$pid" 2>/dev/null || true
             delete_host_route "$PROTECTED_HOST"
+            cleanup_dns_routes
             rm -f "$PID_FILE"
             exit 1
         fi
@@ -360,6 +368,7 @@ final class XrayTunController {
         route add -net 128.0.0.0/1 -interface "$tun_interface" >> "$CONTROL_LOG_FILE" 2>&1 || true
 
         \(protectHostRouteCommands())
+        protect_dns_routes
 
         public_interface=$(route -n get 1.1.1.1 2>/dev/null | awk '/interface:/{print $2; exit}' || true)
         protected_interface=$(route -n get "$PROTECTED_HOST" 2>/dev/null | awk '/interface:/{print $2; exit}' || true)
@@ -378,6 +387,7 @@ final class XrayTunController {
                 route delete -net 0.0.0.0/1 >/dev/null 2>&1 || true
                 route delete -net 128.0.0.0/1 >/dev/null 2>&1 || true
                 delete_host_route "$PROTECTED_HOST"
+                cleanup_dns_routes
                 rm -f "$PID_FILE"
                 exit 1
                 ;;
@@ -394,6 +404,7 @@ final class XrayTunController {
                 route delete -net 0.0.0.0/1 >/dev/null 2>&1 || true
                 route delete -net 128.0.0.0/1 >/dev/null 2>&1 || true
                 delete_host_route "$PROTECTED_HOST"
+                cleanup_dns_routes
                 rm -f "$PID_FILE"
                 exit 1
                 ;;
@@ -408,12 +419,16 @@ final class XrayTunController {
         let q = shellQuote
         let pidFile = stateDirectoryPath + "/xray-tun.pid"
         let protectedHostFile = stateDirectoryPath + "/xray-tun-protected-host"
+        let protectedDNSFile = stateDirectoryPath + "/xray-tun-protected-dns"
         let controlLogFile = stateDirectoryPath + "/xray-tun-control.log"
         let sessionStateFile = stateDirectoryPath + "/xray-tun-session.json"
 
         var commands: [String] = []
         commands.append("OUTBOUND_INTERFACE=\(q(outboundInterface ?? ""))")
+        commands.append("PROTECTED_DNS_FILE=\(q(protectedDNSFile))")
+        commands.append("CONTROL_LOG_FILE=\(q(controlLogFile))")
         commands.append(deleteHostRouteFunction())
+        commands.append(dnsRouteFunctions())
         commands.append("mkdir -p \(q(stateDirectoryPath))")
         commands.append("printf '%s helper stop requested\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\" >> \(q(controlLogFile))")
         if let pid {
@@ -426,10 +441,12 @@ final class XrayTunController {
         } else {
             commands.append("if [ -f \(q(protectedHostFile)) ]; then protected_host=$(cat \(q(protectedHostFile)) 2>/dev/null || true); if [ -n \"$protected_host\" ]; then delete_host_route \"$protected_host\"; fi; fi")
         }
+        commands.append("cleanup_dns_routes")
         commands.append("route delete -net 0.0.0.0/1 >/dev/null 2>&1 || true")
         commands.append("route delete -net 128.0.0.0/1 >/dev/null 2>&1 || true")
         commands.append("rm -f \(q(pidFile))")
         commands.append("rm -f \(q(protectedHostFile))")
+        commands.append("rm -f \(q(protectedDNSFile))")
         commands.append("rm -f \(q(sessionStateFile))")
         return commands.joined(separator: "; ")
     }
@@ -455,6 +472,51 @@ final class XrayTunController {
             while route delete -host "$host" >/dev/null 2>&1; do
                 i=$((i + 1))
                 [ "$i" -ge 10 ] && break
+            done
+        }
+        """
+    }
+
+    private func dnsRouteFunctions() -> String {
+        """
+        is_public_ipv4() {
+            ip="$1"
+            case "$ip" in
+                ""|*[!0-9.]*|*.*.*.*.*) return 1 ;;
+            esac
+            o1=${ip%%.*}
+            rest=${ip#*.}
+            o2=${rest%%.*}
+            case "$o1" in
+                0|10|127) return 1 ;;
+                169) [ "$o2" = "254" ] && return 1 ;;
+                172) [ "$o2" -ge 16 ] 2>/dev/null && [ "$o2" -le 31 ] 2>/dev/null && return 1 ;;
+                192) [ "$o2" = "168" ] && return 1 ;;
+            esac
+            [ "$o1" -ge 224 ] 2>/dev/null && return 1
+            return 0
+        }
+
+        cleanup_dns_routes() {
+            if [ -f "$PROTECTED_DNS_FILE" ]; then
+                while IFS= read -r dns_server; do
+                    [ -n "$dns_server" ] || continue
+                    delete_host_route "$dns_server"
+                done < "$PROTECTED_DNS_FILE"
+            fi
+            rm -f "$PROTECTED_DNS_FILE"
+        }
+
+        protect_dns_routes() {
+            : > "$PROTECTED_DNS_FILE"
+            scutil --dns 2>/dev/null | awk '/nameserver\\[[0-9]+\\]/{print $3}' | sort -u | while IFS= read -r dns_server; do
+                is_public_ipv4 "$dns_server" || continue
+                delete_host_route "$dns_server"
+                dns_gateway=$(route -n get "$dns_server" 2>/dev/null | awk '/gateway:/{print $2; exit}' || true)
+                if [ -n "$dns_gateway" ]; then
+                    route add -host "$dns_server" "$dns_gateway" >> "$CONTROL_LOG_FILE" 2>&1 || route change -host "$dns_server" "$dns_gateway" >> "$CONTROL_LOG_FILE" 2>&1 || true
+                    printf '%s\n' "$dns_server" >> "$PROTECTED_DNS_FILE"
+                fi
             done
         }
         """
