@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 struct PrivilegedHelperClient: Sendable {
-    static let expectedVersion = "3"
+    static let expectedVersion = "4"
     static let label = "dev.x.teleport.PrivilegedHelper"
     static let socketPath = "/var/run/dev.x.teleport.helper.sock"
     static let installedToolPath = "/Library/PrivilegedHelperTools/dev.x.teleport.PrivilegedHelper"

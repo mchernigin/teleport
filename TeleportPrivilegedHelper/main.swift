@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 import Security
 
-private let helperVersion = "3"
+private let helperVersion = "4"
 private let helperLabel = "dev.x.teleport.PrivilegedHelper"
 private let socketPath = "/var/run/dev.x.teleport.helper.sock"
 private let installedXrayPath = "/Library/PrivilegedHelperTools/dev.x.teleport.xray"
@@ -513,6 +513,13 @@ final class XrayTunController {
                 is_public_ipv4 "$dns_server" || continue
                 delete_host_route "$dns_server"
                 dns_gateway=$(route -n get "$dns_server" 2>/dev/null | awk '/gateway:/{print $2; exit}' || true)
+                dns_interface=$(route -n get "$dns_server" 2>/dev/null | awk '/interface:/{print $2; exit}' || true)
+                case "$dns_interface" in
+                    utun*) dns_gateway="${gateway:-$dns_gateway}" ;;
+                esac
+                if [ -z "$dns_gateway" ]; then
+                    dns_gateway="${gateway:-}"
+                fi
                 if [ -n "$dns_gateway" ]; then
                     route add -host "$dns_server" "$dns_gateway" >> "$CONTROL_LOG_FILE" 2>&1 || route change -host "$dns_server" "$dns_gateway" >> "$CONTROL_LOG_FILE" 2>&1 || true
                     printf '%s\n' "$dns_server" >> "$PROTECTED_DNS_FILE"
