@@ -12,11 +12,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var selectedConnectionID: UUID?
     @Published private(set) var connectionPhase: ConnectionPhase = .unconfigured
     @Published private(set) var proxyPhase: ProxyPhase = .disabled
-    @Published private(set) var lastError: String? {
-        didSet {
-            lastErrorDetails = nil
-        }
-    }
+    @Published private(set) var lastError: String?
     @Published private(set) var lastErrorDetails: String?
     @Published private(set) var proxyEndpoint: ProxyEndpoint
     @Published private(set) var connectionMode: ConnectionMode
@@ -246,7 +242,7 @@ final class AppViewModel: ObservableObject {
     func addConnection(from rawValue: String) -> Bool {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            lastError = "Paste a connection or subscription URL first"
+            setStoredError("Paste a connection or subscription URL first")
             return false
         }
 
@@ -261,7 +257,7 @@ final class AppViewModel: ObservableObject {
         guard let index = savedConnections.firstIndex(where: { $0.id == id }) else { return }
 
         if selectedConnectionID == id && hasActiveConnectionSession {
-            lastError = "Disconnect before removing the active connection"
+            setStoredError("Disconnect before removing the active connection")
             return
         }
 
@@ -274,7 +270,7 @@ final class AppViewModel: ObservableObject {
             normalizeSelection()
         }
 
-        lastError = nil
+        setStoredError(nil)
         persistSettingError()
     }
 
@@ -283,7 +279,7 @@ final class AppViewModel: ObservableObject {
 
         if hasActiveConnectionSession,
            affectedConnections.contains(where: { $0.id == selectedConnectionID }) {
-            lastError = "Disconnect before removing the active subscription"
+            setStoredError("Disconnect before removing the active subscription")
             return
         }
 
@@ -295,7 +291,7 @@ final class AppViewModel: ObservableObject {
         let removedIDs = Set(affectedConnections.map(\.id))
         cancelHealthProbes(ids: removedIDs)
         normalizeSelection()
-        lastError = nil
+        setStoredError(nil)
         persistSettingError()
     }
 
@@ -306,7 +302,7 @@ final class AppViewModel: ObservableObject {
         let shouldReconnect = previousSelectionID != id && hasEstablishedConnection
 
         if !canChangeSelection, previousSelectionID != id {
-            lastError = "Please wait for the current connection action to finish"
+            setStoredError("Please wait for the current connection action to finish")
             return
         }
 
@@ -314,7 +310,7 @@ final class AppViewModel: ObservableObject {
         if selectedConfiguration != nil, connectionPhase == .unconfigured {
             connectionPhase = .stopped
         }
-        lastError = nil
+        setStoredError(nil)
         persistSettingError()
         enqueueHealthProbes(for: [id], force: false, priority: true)
 
@@ -361,26 +357,25 @@ final class AppViewModel: ObservableObject {
                 }
             }
 
-            lastError = nil
+            setStoredError(nil)
             persistSettingError()
 
             if urlChanged {
                 refreshSubscription(id: id, autoSelectFirstImported: false)
             }
         } catch {
-            lastError = error.localizedDescription
+            setStoredError(error.localizedDescription)
         }
     }
 
     func clearError() {
-        lastError = nil
-        lastErrorDetails = nil
+        setStoredError(nil)
     }
 
     func selectConnectionMode(_ mode: ConnectionMode) {
         guard mode != connectionMode else { return }
         guard canChangeSelection && !hasActiveConnectionSession else {
-            lastError = "Disconnect before changing connection mode"
+            setStoredError("Disconnect before changing connection mode")
             return
         }
 
@@ -389,7 +384,7 @@ final class AppViewModel: ObservableObject {
         connectionBackend = connectionBackendFactory.makeBackend(for: mode)
         proxyPhase = .disabled
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
-        lastError = nil
+        setStoredError(nil)
         updateMenuBarAnimation()
         persistSettingError()
     }
@@ -397,7 +392,7 @@ final class AppViewModel: ObservableObject {
     func connect() {
         guard let selectedConfiguration else {
             connectionPhase = .unconfigured
-            lastError = "Add and select a connection first"
+            setStoredError("Add and select a connection first")
             return
         }
 
@@ -422,7 +417,7 @@ final class AppViewModel: ObservableObject {
 
                 Task { @MainActor [weak self] in
                     self?.proxyPhase = .disabled
-                    self?.lastError = nil
+                    self?.setStoredError(nil)
                     self?.updateMenuBarAnimation()
                 }
             } catch {
@@ -453,7 +448,7 @@ final class AppViewModel: ObservableObject {
     private func reconnectToSelectedConnection() {
         guard let selectedConfiguration else {
             connectionPhase = .unconfigured
-            lastError = "Add and select a connection first"
+            setStoredError("Add and select a connection first")
             return
         }
 
@@ -463,7 +458,7 @@ final class AppViewModel: ObservableObject {
 
         connectionPhase = .stopping
         proxyPhase = .disabling
-        lastError = nil
+        setStoredError(nil)
         updateMenuBarAnimation()
 
         operationQueue.async { [weak self] in
@@ -483,7 +478,7 @@ final class AppViewModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .running
                     self?.proxyPhase = .enabled
-                    self?.lastError = nil
+                    self?.setStoredError(nil)
                     self?.updateMenuBarAnimation()
                 }
             } catch {
@@ -503,7 +498,7 @@ final class AppViewModel: ObservableObject {
 
         connectionPhase = .starting
         proxyPhase = .enabling
-        lastError = nil
+        setStoredError(nil)
         updateMenuBarAnimation()
 
         operationQueue.async { [weak self] in
@@ -513,7 +508,7 @@ final class AppViewModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = .running
                     self?.proxyPhase = .enabled
-                    self?.lastError = nil
+                    self?.setStoredError(nil)
                     self?.updateMenuBarAnimation()
                 }
             } catch {
@@ -527,8 +522,13 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    private func setStoredError(_ message: String?) {
+        lastError = message
+        lastErrorDetails = nil
+    }
+
     private func applyConnectionError(_ error: Error) {
-        lastError = error.localizedDescription
+        setStoredError(error.localizedDescription)
         if let localizedError = error as? LocalizedError,
            let details = localizedError.failureReason?.trimmingCharacters(in: .whitespacesAndNewlines),
            !details.isEmpty,
@@ -558,7 +558,7 @@ final class AppViewModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.connectionPhase = hasSavedConfiguration ? .stopped : .unconfigured
                     self?.proxyPhase = .disabled
-                    self?.lastError = nil
+                    self?.setStoredError(nil)
                     self?.updateMenuBarAnimation()
                 }
             } catch {
@@ -580,13 +580,13 @@ final class AppViewModel: ObservableObject {
             rebuildSavedConnectionIndexes()
             selectedConnectionID = savedConnection.id
             connectionPhase = .stopped
-            lastError = nil
+            setStoredError(nil)
             updateMenuBarAnimation()
             try persist()
             enqueueHealthProbes(for: [savedConnection.id], force: true, priority: true)
             return true
         } catch {
-            lastError = error.localizedDescription
+            setStoredError(error.localizedDescription)
             if savedConnections.isEmpty {
                 connectionPhase = .unconfigured
             }
@@ -614,12 +614,12 @@ final class AppViewModel: ObservableObject {
 
             subscriptionSources.append(source)
             rebuildSubscriptionSourceIndexes()
-            lastError = nil
+            setStoredError(nil)
             persistSettingError()
             refreshSubscription(id: source.id, autoSelectFirstImported: savedConnections.isEmpty)
             return true
         } catch {
-            lastError = error.localizedDescription
+            setStoredError(error.localizedDescription)
             if savedConnections.isEmpty {
                 connectionPhase = .unconfigured
             }
@@ -636,7 +636,7 @@ final class AppViewModel: ObservableObject {
 
         if hasActiveConnectionSession,
            selectedConnection.source?.subscriptionSourceID == id {
-            lastError = "Disconnect before refreshing the active subscription"
+            setStoredError("Disconnect before refreshing the active subscription")
             return
         }
 
@@ -648,7 +648,7 @@ final class AppViewModel: ObservableObject {
         updateSubscriptionSource(source.id) {
             $0.lastError = nil
         }
-        lastError = nil
+        setStoredError(nil)
         persistSettingError()
 
         let parser = parser
@@ -759,7 +759,7 @@ final class AppViewModel: ObservableObject {
         }
 
         refreshingSubscriptionIDs.remove(sourceID)
-        lastError = nil
+        setStoredError(nil)
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
         updateMenuBarAnimation()
         persistSettingError()
@@ -1013,7 +1013,7 @@ final class AppViewModel: ObservableObject {
         connectionPhase = selectedConfiguration == nil ? .unconfigured : .stopped
         proxyPhase = .disabled
         if resetError {
-            lastError = nil
+            setStoredError(nil)
         }
         updateMenuBarAnimation()
     }
@@ -1028,7 +1028,7 @@ final class AppViewModel: ObservableObject {
         do {
             try persist()
         } catch {
-            lastError = error.localizedDescription
+            setStoredError(error.localizedDescription)
         }
     }
 
