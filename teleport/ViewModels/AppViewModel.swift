@@ -28,8 +28,6 @@ final class AppViewModel: ObservableObject {
     private let healthProbeService: ConnectionHealthProbeService
     private let operationQueue = DispatchQueue(label: "dev.x.teleport.connection-operations", qos: .userInitiated)
     private let persistenceQueue = DispatchQueue(label: "dev.x.teleport.persistence", qos: .utility)
-    private let healthFreshnessTTL: TimeInterval = 30 * 60
-    private let automaticHealthProbeLimit = 1
     // Full tunnel probes spin up temporary Xray instances; allow a wider fan-out for bulk checks.
     private let healthProbeConcurrencyLimit = 10
     private var autoRefreshTimerCancellable: AnyCancellable?
@@ -192,21 +190,7 @@ final class AppViewModel: ObservableObject {
             return queued
         }
 
-        guard let healthCheck = connection.healthCheck else {
-            return .unknown
-        }
-
-        let freshness = healthCheck.freshness(now: Date(), ttl: healthFreshnessTTL)
-        switch freshness {
-        case .fresh:
-            return healthCheck
-        case .stale:
-            var stale = healthCheck
-            stale.state = .unknown
-            return stale
-        case .unknown:
-            return .unknown
-        }
+        return connection.healthCheck ?? .unknown
     }
 
     func healthSummary(for connection: SavedConnection) -> String {
@@ -776,6 +760,7 @@ final class AppViewModel: ObservableObject {
         )
 
         savedConnections = replacementResult.savedConnections
+        invalidateHealthChecksForImportedConnections(from: sourceID)
         rebuildSavedConnectionIndexes()
         selectedConnectionID = replacementResult.selectedConnectionID
 
@@ -825,7 +810,6 @@ final class AppViewModel: ObservableObject {
             .autoconnect()
             .sink { [weak self] _ in
                 self?.performScheduledSubscriptionRefreshes()
-                self?.performScheduledHealthRefreshes()
             }
     }
 
@@ -853,25 +837,16 @@ final class AppViewModel: ObservableObject {
         enqueueHealthProbes(for: [selectedConnectionID], force: false, priority: true)
     }
 
-    private func performScheduledHealthRefreshes() {
-        guard let selectedConnection,
-              needsHealthRefresh(for: selectedConnection) else {
-            return
-        }
-
-        enqueueHealthProbes(for: [selectedConnection.id], force: false, priority: false)
-    }
-
     private func needsHealthRefresh(for connection: SavedConnection) -> Bool {
         guard let healthCheck = connection.healthCheck else {
             return true
         }
 
-        switch healthCheck.freshness(now: Date(), ttl: healthFreshnessTTL) {
-        case .fresh:
-            return false
-        case .stale, .unknown:
+        switch healthCheck.state {
+        case .unknown, .queued, .checking:
             return true
+        case .reachable, .unreachable:
+            return false
         }
     }
 
@@ -985,6 +960,13 @@ final class AppViewModel: ObservableObject {
         guard !ids.isEmpty else { return }
         for id in ids {
             cancelHealthProbe(id: id)
+        }
+    }
+
+    private func invalidateHealthChecksForImportedConnections(from sourceID: UUID) {
+        for index in savedConnections.indices
+        where savedConnections[index].source?.subscriptionSourceID == sourceID {
+            savedConnections[index].healthCheck = nil
         }
     }
 

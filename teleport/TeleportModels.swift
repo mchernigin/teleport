@@ -51,12 +51,6 @@ enum ConnectionHealthState: String, Codable {
     case unreachable
 }
 
-enum ConnectionHealthFreshness {
-    case fresh
-    case stale
-    case unknown
-}
-
 enum ConnectionHealthLatencyKind: String, Codable {
     case tcpConnect
     case proxyRequest
@@ -88,17 +82,6 @@ struct ConnectionHealthCheck: Codable, Equatable {
         )
     }
 
-    func freshness(now: Date, ttl: TimeInterval) -> ConnectionHealthFreshness {
-        guard state != .unknown && state != .queued && state != .checking else {
-            return .unknown
-        }
-
-        guard let checkedAt else {
-            return .unknown
-        }
-
-        return now.timeIntervalSince(checkedAt) <= ttl ? .fresh : .stale
-    }
 }
 
 struct ProxyEndpoint: Codable, Equatable {
