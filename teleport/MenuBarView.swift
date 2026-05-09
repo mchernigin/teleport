@@ -37,7 +37,7 @@ struct MenuBarView: View {
     }
 
     private var headerStatusText: String {
-        if viewModel.isConnected {
+        if viewModel.isConnected || viewModel.proxyPhase == .enabled {
             return "Connected"
         }
 
@@ -61,7 +61,7 @@ struct MenuBarView: View {
             return .red
         case .starting, .stopping:
             return .orange
-        case .running where viewModel.proxyPhase == .enabled:
+        case _ where viewModel.proxyPhase == .enabled:
             return Color(NSColor.systemGreen.withAlphaComponent(0.72))
         case .unconfigured:
             return .secondary
@@ -181,8 +181,8 @@ struct MenuBarView: View {
                 .font(.subheadline.weight(.semibold))
 
             HStack {
-                Button(viewModel.isConnected ? "Disconnect" : "Connect") {
-                    if viewModel.isConnected || viewModel.canDisconnect {
+                Button(viewModel.canDisconnect ? "Disconnect" : "Connect") {
+                    if viewModel.canDisconnect {
                         viewModel.disconnect()
                     } else {
                         viewModel.connect()

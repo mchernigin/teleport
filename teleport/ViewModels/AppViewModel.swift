@@ -122,6 +122,17 @@ final class AppViewModel: ObservableObject {
         !(connectionPhase == .starting || connectionPhase == .stopping || proxyPhase == .enabling || proxyPhase == .disabling)
     }
 
+    var hasActiveConnectionSession: Bool {
+        connectionPhase == .running
+            || connectionPhase == .starting
+            || connectionPhase == .stopping
+            || connectionPhase == .failed
+            || proxyPhase == .enabled
+            || proxyPhase == .enabling
+            || proxyPhase == .disabling
+            || proxyPhase == .failed
+    }
+
     var isConnected: Bool {
         connectionPhase == .running && proxyPhase == .enabled
     }
@@ -269,6 +280,7 @@ final class AppViewModel: ObservableObject {
         } else {
             normalizeSelection()
         }
+        updateIdleConnectionPhaseIfNeeded()
 
         setStoredError(nil)
         persistSettingError()
@@ -291,6 +303,7 @@ final class AppViewModel: ObservableObject {
         let removedIDs = Set(affectedConnections.map(\.id))
         cancelHealthProbes(ids: removedIDs)
         normalizeSelection()
+        updateIdleConnectionPhaseIfNeeded()
         setStoredError(nil)
         persistSettingError()
     }
@@ -336,6 +349,15 @@ final class AppViewModel: ObservableObject {
 
             let trimmedName = customName.trimmingCharacters(in: .whitespacesAndNewlines)
             let urlChanged = existingSource.urlString.caseInsensitiveCompare(normalizedURL) != .orderedSame
+            let selectedConnectionSourceID = selectedConnectionID.flatMap { savedConnectionsByID[$0] }?.source?.subscriptionSourceID
+            let selectionBelongsToUpdatedSource = selectedConnectionSourceID == id
+
+            if urlChanged,
+               hasActiveConnectionSession,
+               selectionBelongsToUpdatedSource {
+                setStoredError("Disconnect before changing the active subscription URL")
+                return
+            }
 
             updateSubscriptionSource(id) { source in
                 source.title = trimmedName
@@ -352,9 +374,10 @@ final class AppViewModel: ObservableObject {
             if urlChanged {
                 savedConnections.removeAll { $0.source?.subscriptionSourceID == id }
                 rebuildSavedConnectionIndexes()
-                if selectedConnection?.source?.subscriptionSourceID == id {
+                if selectionBelongsToUpdatedSource {
                     normalizeSelection()
                 }
+                updateIdleConnectionPhaseIfNeeded()
             }
 
             setStoredError(nil)
@@ -432,17 +455,6 @@ final class AppViewModel: ObservableObject {
 
     private var hasEstablishedConnection: Bool {
         connectionPhase == .running || proxyPhase == .enabled
-    }
-
-    private var hasActiveConnectionSession: Bool {
-        connectionPhase == .running
-            || connectionPhase == .starting
-            || connectionPhase == .stopping
-            || connectionPhase == .failed
-            || proxyPhase == .enabled
-            || proxyPhase == .enabling
-            || proxyPhase == .disabling
-            || proxyPhase == .failed
     }
 
     private func reconnectToSelectedConnection() {
@@ -576,10 +588,13 @@ final class AppViewModel: ObservableObject {
         do {
             let configuration = try parser.parse(rawLink)
             let savedConnection = SavedConnection(id: UUID(), configuration: configuration, savedAt: Date(), source: nil)
+            let shouldSelectNewConnection = !hasActiveConnectionSession || selectedConnectionID == nil
             savedConnections.append(savedConnection)
             rebuildSavedConnectionIndexes()
-            selectedConnectionID = savedConnection.id
-            connectionPhase = .stopped
+            if shouldSelectNewConnection {
+                selectedConnectionID = savedConnection.id
+            }
+            updateIdleConnectionPhaseIfNeeded()
             setStoredError(nil)
             updateMenuBarAnimation()
             try persist()
@@ -739,6 +754,18 @@ final class AppViewModel: ObservableObject {
         fetchedAt: Date,
         autoSelectFirstImported: Bool
     ) {
+        let selectedConnectionSourceID = selectedConnectionID.flatMap { savedConnectionsByID[$0] }?.source?.subscriptionSourceID
+        if hasActiveConnectionSession,
+           selectedConnectionSourceID == sourceID {
+            refreshingSubscriptionIDs.remove(sourceID)
+            updateSubscriptionSource(sourceID) {
+                $0.lastError = "Disconnect before refreshing the active subscription"
+            }
+            setStoredError("Disconnect before refreshing the active subscription")
+            persistSettingError()
+            return
+        }
+
         let replacementResult = SubscriptionConnectionReconciler().reconcile(
             existingConnections: savedConnections,
             sourceID: sourceID,
@@ -760,7 +787,7 @@ final class AppViewModel: ObservableObject {
 
         refreshingSubscriptionIDs.remove(sourceID)
         setStoredError(nil)
-        connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
+        updateIdleConnectionPhaseIfNeeded()
         updateMenuBarAnimation()
         persistSettingError()
         refreshSubscriptionHealth(id: sourceID, force: true)
@@ -1006,6 +1033,11 @@ final class AppViewModel: ObservableObject {
         }
 
         selectedConnectionID = savedConnections.first?.id
+    }
+
+    private func updateIdleConnectionPhaseIfNeeded() {
+        guard !hasActiveConnectionSession else { return }
+        connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
     }
 
     private func teardownConnection(resetError: Bool) {

@@ -6,7 +6,7 @@ struct MenuBarIconView: View {
     let proxyPhase: ProxyPhase
 
     private var isConnected: Bool {
-        phase == .running && proxyPhase == .enabled
+        proxyPhase == .enabled
     }
 
     var body: some View {
