@@ -60,24 +60,80 @@ package: build-release
     PACKAGE_APP="$DIST/$PACKAGE_NAME.app"
     DMG_ROOT="$DIST/dmg-root"
     PACKAGE_DMG="$DIST/$PACKAGE_NAME.dmg"
+    RW_DMG="$DIST/$PACKAGE_NAME-rw.dmg"
+    MOUNT_DIR=""
+
+    cleanup() {
+      if [[ -n "${MOUNT_DIR:-}" && -d "$MOUNT_DIR" ]]; then
+        hdiutil detach "$MOUNT_DIR" -quiet >/dev/null 2>&1 || true
+      fi
+      rm -rf "$DMG_ROOT" "$RW_DMG"
+    }
+    trap cleanup EXIT
 
     mkdir -p "$DIST"
-    rm -rf "$PACKAGE_APP" "$DMG_ROOT" "$PACKAGE_DMG"
+    rm -rf "$PACKAGE_APP" "$DMG_ROOT" "$PACKAGE_DMG" "$RW_DMG"
 
     ditto "$APP" "$PACKAGE_APP"
 
-    mkdir -p "$DMG_ROOT"
+    mkdir -p "$DMG_ROOT/.background"
     ditto "$APP" "$DMG_ROOT/{{app_name}}.app"
     ln -s /Applications "$DMG_ROOT/Applications"
+
+    DMG_BACKGROUND="${DMG_BACKGROUND:-packaging/dmg-background.png}"
+    cp "$DMG_BACKGROUND" "$DMG_ROOT/.background/dmg-background.png"
 
     hdiutil create \
       -volname "{{app_name}}" \
       -srcfolder "$DMG_ROOT" \
       -ov \
-      -format UDZO \
-      "$PACKAGE_DMG"
+      -format UDRW \
+      -fs HFS+ \
+      "$RW_DMG"
 
-    rm -rf "$DMG_ROOT"
+    MOUNT_DIR=$(hdiutil attach "$RW_DMG" -nobrowse -noverify | awk '/Apple_HFS/ {for (i = 3; i <= NF; i++) printf "%s%s", (i == 3 ? "" : OFS), $i; print ""; exit}')
+    if [[ -z "$MOUNT_DIR" || ! -d "$MOUNT_DIR" ]]; then
+      echo "Failed to mount writable DMG" >&2
+      exit 1
+    fi
+    chflags hidden "$MOUNT_DIR/.background" || true
+
+    osascript <<EOF
+    tell application "Finder"
+      set dmgFolder to POSIX file "$MOUNT_DIR" as alias
+      set backgroundFile to POSIX file "$MOUNT_DIR/.background/dmg-background.png" as alias
+      open dmgFolder
+      delay 0.2
+      set dmgWindow to Finder window 1
+      set current view of dmgWindow to icon view
+      set toolbar visible of dmgWindow to false
+      set statusbar visible of dmgWindow to false
+      set bounds of dmgWindow to {80, 80, 740, 496}
+      set viewOptions to icon view options of dmgWindow
+      set arrangement of viewOptions to not arranged
+      set icon size of viewOptions to 128
+      set background picture of viewOptions to backgroundFile
+      set position of item "{{app_name}}.app" of dmgWindow to {170, 194}
+      set position of item "Applications" of dmgWindow to {490, 194}
+      update dmgFolder without registering applications
+      delay 1
+      close dmgWindow
+    end tell
+    EOF
+
+    sync
+    hdiutil detach "$MOUNT_DIR" -quiet
+    MOUNT_DIR=""
+    sleep 1
+
+    hdiutil convert "$RW_DMG" \
+      -format UDZO \
+      -imagekey zlib-level=9 \
+      -o "$PACKAGE_DMG" \
+      -ov
+
+    rm -rf "$DMG_ROOT" "$RW_DMG"
+    trap - EXIT
 
     echo "Packaged app: $PACKAGE_APP"
     echo "Packaged dmg: $PACKAGE_DMG"
