@@ -31,6 +31,10 @@ final class XrayTunConnectionBackend: ConnectionBackend {
 
     func hasRestorableState() -> Bool { false }
 
+    func hasActiveRuntimeSession() -> Bool {
+        runtimeManager.isRunning()
+    }
+
     func restorePreviousState() throws {}
 
     func start(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint) throws {

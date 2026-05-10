@@ -89,6 +89,7 @@ final class AppViewModel: ObservableObject {
         rebuildSubscriptionSourceIndexes()
         normalizeSelection()
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
+        detectActiveRuntimeSessionFromPreviousRunIfNeeded()
         startAutoRefreshTimer()
         updateMenuBarAnimation()
         scheduleInitialHealthRefresh()
@@ -412,6 +413,12 @@ final class AppViewModel: ObservableObject {
 
     func handleAppTermination() {
         teardownConnection(resetError: true)
+    }
+
+    private func detectActiveRuntimeSessionFromPreviousRunIfNeeded() {
+        guard connectionBackend.hasActiveRuntimeSession() else { return }
+        connectionPhase = .running
+        proxyPhase = .enabled
     }
 
     private func restoreProxyStateFromPreviousSessionIfNeeded() {

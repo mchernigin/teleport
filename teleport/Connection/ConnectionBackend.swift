@@ -2,6 +2,7 @@ import Foundation
 
 protocol ConnectionBackend: AnyObject {
     func hasRestorableState() -> Bool
+    func hasActiveRuntimeSession() -> Bool
     func restorePreviousState() throws
     func start(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint) throws
     func reconnect(configuration: ConnectionConfiguration, endpoint: ProxyEndpoint, shouldDisableExistingProxy: Bool) throws
@@ -26,6 +27,10 @@ final class SystemProxyConnectionBackend: ConnectionBackend {
 
     func hasRestorableState() -> Bool {
         proxyService.hasSavedProxySnapshot()
+    }
+
+    func hasActiveRuntimeSession() -> Bool {
+        runtimeManager.isRunning
     }
 
     func restorePreviousState() throws {
