@@ -67,10 +67,14 @@ private struct GeneralSettingsView: View {
                         Text(mode.displayName).tag(mode)
                     }
                 } label: {
-                    Text("Mode")
-                    Text(viewModel.connectionMode.description)
+                    Text("Teleport Mode")
+                    Text("System Proxy routes apps that respect macOS proxy settings. VPN routes the whole device through Xray TUN and requires administrator approval.")
                 }
-                .disabled(!viewModel.canChangeSelection)
+                .disabled(!viewModel.canChangeSelection || viewModel.hasActiveConnectionSession)
+            } footer: {
+                if viewModel.hasActiveConnectionSession {
+                    Text("Disconnect before changing connection mode.")
+                }
             }
         }
         .formStyle(.grouped)

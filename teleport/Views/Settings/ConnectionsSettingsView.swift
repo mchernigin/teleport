@@ -13,26 +13,6 @@ struct ConnectionsSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let error = viewModel.lastError {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if let details = viewModel.lastErrorDetails {
-                        DisclosureGroup("Diagnostic details") {
-                            Text(details)
-                                .font(.caption.monospaced())
-                                .textSelection(.enabled)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .font(.caption)
-                    }
-                }
-            }
-
             if viewModel.savedConnections.isEmpty && viewModel.subscriptionSources.isEmpty {
                 VStack {
                     Spacer(minLength: 0)
@@ -105,6 +85,7 @@ struct ConnectionsSettingsView: View {
             }
         }
         .padding(.horizontal, 16)
+        .padding(.top, 16)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sheet(isPresented: $isShowingAddSheet) {
