@@ -735,7 +735,35 @@ final class AppViewModel: ObservableObject {
             throw SubscriptionError.noSupportedEntries
         }
 
-        return SubscriptionImportResult(importedEntries: importedEntries, skippedCount: skippedCount)
+        return SubscriptionImportResult(
+            importedEntries: disambiguateDuplicateDisplayNames(in: importedEntries),
+            skippedCount: skippedCount
+        )
+    }
+
+    nonisolated private static func disambiguateDuplicateDisplayNames(in entries: [ImportedSubscriptionEntry]) -> [ImportedSubscriptionEntry] {
+        let countsByName = entries.reduce(into: [String: Int]()) { counts, entry in
+            counts[displayNameKey(for: entry.configuration), default: 0] += 1
+        }
+        var indexesByName: [String: Int] = [:]
+
+        return entries.map { entry in
+            let key = displayNameKey(for: entry.configuration)
+            guard countsByName[key, default: 0] > 1 else { return entry }
+
+            indexesByName[key, default: 0] += 1
+            let disambiguatedName = "\(entry.configuration.displayName) (\(indexesByName[key, default: 1]))"
+            return ImportedSubscriptionEntry(
+                sourceEntryID: entry.sourceEntryID,
+                configuration: entry.configuration.withDisplayName(disambiguatedName)
+            )
+        }
+    }
+
+    nonisolated private static func displayNameKey(for configuration: ConnectionConfiguration) -> String {
+        configuration.displayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 
     private func applyImportedEntries(

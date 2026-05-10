@@ -138,7 +138,7 @@ struct ConnectionConfiguration: Codable, Equatable {
     let grpcServiceName: String?
     let transportMode: String?
 
-    var displayName: String {
+    nonisolated var displayName: String {
         if let remarks, !remarks.isEmpty {
             return remarks
         }
@@ -209,6 +209,33 @@ struct ConnectionConfiguration: Codable, Equatable {
             transportMode?.lowercased() ?? ""
         ]
         return components.joined(separator: "|")
+    }
+
+    nonisolated func withDisplayName(_ displayName: String) -> ConnectionConfiguration {
+        let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ConnectionConfiguration(
+            rawLink: rawLink.withFragment(trimmedDisplayName),
+            protocolType: protocolType,
+            host: host,
+            port: port,
+            remarks: trimmedDisplayName,
+            security: security,
+            transport: transport,
+            path: path,
+            hostHeader: hostHeader,
+            serverName: serverName,
+            alpn: alpn,
+            fingerprint: fingerprint,
+            publicKey: publicKey,
+            shortID: shortID,
+            spiderX: spiderX,
+            vlessUserID: vlessUserID,
+            vlessFlow: vlessFlow,
+            trojanPassword: trojanPassword,
+            allowsInsecureTLS: allowsInsecureTLS,
+            grpcServiceName: grpcServiceName,
+            transportMode: transportMode
+        )
     }
 
     private var transportSummary: String {
@@ -319,6 +346,16 @@ struct ConnectionConfiguration: Codable, Equatable {
         allowsInsecureTLS = try container.decodeIfPresent(Bool.self, forKey: .allowsInsecureTLS) ?? false
         grpcServiceName = try container.decodeIfPresent(String.self, forKey: .grpcServiceName)
         transportMode = try container.decodeIfPresent(String.self, forKey: .transportMode)
+    }
+}
+
+private extension String {
+    nonisolated func withFragment(_ fragment: String) -> String {
+        let base = split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? self
+        guard let encodedFragment = fragment.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) else {
+            return "\(base)#\(fragment)"
+        }
+        return "\(base)#\(encodedFragment)"
     }
 }
 
