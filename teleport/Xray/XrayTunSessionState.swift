@@ -10,7 +10,7 @@ struct XrayTunSessionState: Codable, Sendable {
 }
 
 struct XrayTunLaunchSession: Sendable {
-    var configURL: URL
+    var configData: Data
     var protectedHost: String
     var tunnelInterfaceName: String
     var outboundInterface: String
@@ -23,6 +23,7 @@ struct XrayTunRuntimePaths: Sendable {
     var protectedHostFileURL: URL
     var controlLogFileURL: URL
     var sessionStateFileURL: URL
+    var configFileURL: URL
 
     init(fileManager: FileManager = .default) {
         let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -33,5 +34,6 @@ struct XrayTunRuntimePaths: Sendable {
         protectedHostFileURL = helperStateDirectoryURL.appendingPathComponent("xray-tun-protected-host")
         controlLogFileURL = helperStateDirectoryURL.appendingPathComponent("xray-tun-control.log")
         sessionStateFileURL = stateDirectoryURL.appendingPathComponent("xray-tun-session.json")
+        configFileURL = helperStateDirectoryURL.appendingPathComponent("xray-tun-config.json")
     }
 }

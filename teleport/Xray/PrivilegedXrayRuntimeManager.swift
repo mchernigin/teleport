@@ -33,8 +33,8 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
 
         do {
             try helperInstaller.ensureInstalled(runtimeURL: runtimeURL)
-            try helperClient.start(session: session, paths: paths)
-            try persistSessionState(for: session)
+            let pid = try helperClient.start(session: session, paths: paths)
+            try persistSessionState(for: session, pid: pid)
         } catch {
             throw XrayTunRuntimeError.startFailed(summary: readableSummary(from: error), details: diagnosticDetails(from: error))
         }
@@ -52,7 +52,7 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
     }
 
     func isRunning() -> Bool {
-        guard let pid = readPID() else { return false }
+        guard let pid = readSessionState().map(\.pid) ?? readPID() else { return false }
         if kill(pid, 0) == 0 {
             return true
         }
@@ -105,18 +105,21 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
     }
 
     func capturedLogOutput() -> String? {
-        guard let data = try? Data(contentsOf: paths.logFileURL), !data.isEmpty else { return nil }
-        return String(data: data, encoding: .utf8)
+        guard let response = try? helperClient.readLog(logName: "xray-tun.log", maxBytes: 256 * 1024),
+              response.success,
+              let details = response.details,
+              !details.isEmpty else { return nil }
+        return details
     }
 
-    private func persistSessionState(for session: XrayTunLaunchSession) throws {
-        guard let pid = readPID() else { return }
+    private func persistSessionState(for session: XrayTunLaunchSession, pid: pid_t?) throws {
+        guard let pid else { return }
         let state = XrayTunSessionState(
             pid: pid,
             protectedHost: session.protectedHost,
             tunnelInterfaceName: session.tunnelInterfaceName,
             outboundInterface: session.outboundInterface,
-            configPath: session.configURL.path,
+            configPath: paths.configFileURL.path,
             startedAt: Date()
         )
         let data = try JSONEncoder().encode(state)

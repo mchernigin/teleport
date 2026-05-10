@@ -47,14 +47,14 @@ final class XrayTunConnectionBackend: ConnectionBackend {
 
         let outboundInterface = routeInspector.outboundInterface(for: configuration.host) ?? "auto"
         let tunnelInterfaceName = routeInspector.nextAvailableTunnelInterfaceName()
-        let configURL = try XrayConfigurationWriter(proxyEndpoint: .default).writeTunnelConfig(
+        let configData = try XrayConfigurationWriter(proxyEndpoint: .default).tunnelConfigData(
             for: configuration,
             interfaceName: tunnelInterfaceName,
             outboundInterface: outboundInterface
         )
         try runtimeManager.start(
             session: XrayTunLaunchSession(
-                configURL: configURL,
+                configData: configData,
                 protectedHost: configuration.host,
                 tunnelInterfaceName: tunnelInterfaceName,
                 outboundInterface: outboundInterface

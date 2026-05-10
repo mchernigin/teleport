@@ -1,7 +1,7 @@
 import Foundation
 
 enum PrivilegedHelperConstants {
-    static let version = "5"
+    static let version = "6"
     static let label = "dev.x.teleport.PrivilegedHelper"
     static let socketPath = "/var/run/dev.x.teleport.helper.sock"
     static let helperStateDirectoryPath = "/var/db/dev.x.teleport"

@@ -13,17 +13,19 @@ struct PrivilegedHelperClient: Sendable {
         try send(PrivilegedHelperRequest(command: "status"))
     }
 
-    func start(session: XrayTunLaunchSession, paths: XrayTunRuntimePaths) throws {
+    func start(session: XrayTunLaunchSession, paths: XrayTunRuntimePaths) throws -> pid_t? {
         let response = try send(PrivilegedHelperRequest(
             command: "start",
             stateDirectoryPath: paths.stateDirectoryURL.path,
-            configPath: session.configURL.path,
+            configPath: nil,
+            configData: session.configData,
             protectedHost: session.protectedHost,
             tunnelInterfaceName: session.tunnelInterfaceName,
             outboundInterface: session.outboundInterface,
             pid: nil
         ))
         try response.validate()
+        return response.details.flatMap(pid_t.init)
     }
 
     func stop(paths: XrayTunRuntimePaths, protectedHost: String?, outboundInterface: String?) throws {
@@ -31,12 +33,21 @@ struct PrivilegedHelperClient: Sendable {
             command: "stop",
             stateDirectoryPath: paths.stateDirectoryURL.path,
             configPath: nil,
+            configData: nil,
             protectedHost: protectedHost,
             tunnelInterfaceName: nil,
             outboundInterface: outboundInterface,
             pid: nil
         ))
         try response.validate()
+    }
+
+    func readLog(logName: String, maxBytes: Int) throws -> PrivilegedHelperResponse {
+        try send(PrivilegedHelperRequest(
+            command: "readLog",
+            logName: logName,
+            maxBytes: maxBytes
+        ))
     }
 
     private func send(_ request: PrivilegedHelperRequest) throws -> PrivilegedHelperResponse {
@@ -120,27 +131,36 @@ struct PrivilegedHelperRequest: Codable, Sendable {
     var command: String
     var stateDirectoryPath: String?
     var configPath: String?
+    var configData: Data?
     var protectedHost: String?
     var tunnelInterfaceName: String?
     var outboundInterface: String?
     var pid: Int32?
+    var logName: String?
+    var maxBytes: Int?
 
     init(
         command: String,
         stateDirectoryPath: String? = nil,
         configPath: String? = nil,
+        configData: Data? = nil,
         protectedHost: String? = nil,
         tunnelInterfaceName: String? = nil,
         outboundInterface: String? = nil,
-        pid: Int32? = nil
+        pid: Int32? = nil,
+        logName: String? = nil,
+        maxBytes: Int? = nil
     ) {
         self.command = command
         self.stateDirectoryPath = stateDirectoryPath
         self.configPath = configPath
+        self.configData = configData
         self.protectedHost = protectedHost
         self.tunnelInterfaceName = tunnelInterfaceName
         self.outboundInterface = outboundInterface
         self.pid = pid
+        self.logName = logName
+        self.maxBytes = maxBytes
     }
 }
 

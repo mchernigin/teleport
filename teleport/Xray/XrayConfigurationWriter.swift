@@ -41,13 +41,21 @@ struct XrayConfigurationWriter {
         try writePayload(makeTunnelPayload(configuration: configuration, interfaceName: interfaceName, outboundInterface: outboundInterface), to: outputURL)
     }
 
+    func tunnelConfigData(for configuration: ConnectionConfiguration, interfaceName: String, outboundInterface: String = "auto") throws -> Data {
+        try encodePayload(makeTunnelPayload(configuration: configuration, interfaceName: interfaceName, outboundInterface: outboundInterface))
+    }
+
     private func writePayload(_ payload: [String: Any], to outputURL: URL) throws -> URL {
         let directory = outputURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        let data = try encodePayload(payload)
         try data.write(to: outputURL, options: .atomic)
         return outputURL
+    }
+
+    private func encodePayload(_ payload: [String: Any]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
     }
 
     private func makePayload(configuration: ConnectionConfiguration) -> [String: Any] {

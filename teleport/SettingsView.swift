@@ -149,7 +149,7 @@ private struct NerdShitSettingsView: View {
                     .disabled(logText.isEmpty)
 
                     Button("Open Logs Folder") {
-                        NSWorkspace.shared.open(NerdLogFile.applicationSupportDirectoryURL)
+                        NSWorkspace.shared.open(selectedLog.directoryURL)
                     }
                 } label: {
                     Label("Actions", systemImage: "ellipsis.circle")
@@ -189,6 +189,19 @@ private struct NerdShitSettingsView: View {
     }
 
     private func refreshLog() {
+        if let helperLogName = selectedLog.helperLogName {
+            do {
+                let response = try PrivilegedHelperClient().readLog(logName: helperLogName, maxBytes: Int(maxLogBytes))
+                try response.validate()
+                logText = response.details ?? ""
+                logMetadata = response.summary ?? "Private helper log: \(helperLogName)"
+            } catch {
+                logText = ""
+                logMetadata = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            return
+        }
+
         let url = selectedLog.url
         logText = readTail(from: url)
         logMetadata = metadata(for: url)
@@ -308,6 +321,17 @@ private enum NerdLogFile: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    var helperLogName: String? {
+        switch self {
+        case .systemProxy:
+            return nil
+        case .vpn:
+            return "xray-tun.log"
+        case .vpnControl:
+            return "xray-tun-control.log"
+        }
+    }
+
     var url: URL {
         switch self {
         case .systemProxy:
@@ -316,6 +340,15 @@ private enum NerdLogFile: String, CaseIterable, Identifiable, Hashable {
             return Self.helperStateDirectoryURL.appendingPathComponent("xray-tun.log")
         case .vpnControl:
             return Self.helperStateDirectoryURL.appendingPathComponent("xray-tun-control.log")
+        }
+    }
+
+    var directoryURL: URL {
+        switch self {
+        case .systemProxy:
+            return Self.applicationSupportDirectoryURL
+        case .vpn, .vpnControl:
+            return Self.helperStateDirectoryURL
         }
     }
 
