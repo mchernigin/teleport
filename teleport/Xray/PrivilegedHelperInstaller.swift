@@ -1,6 +1,9 @@
 import Foundation
 
 struct PrivilegedHelperInstaller: Sendable {
+    private static let codeSigningRequirement = "identifier \"dev.x.teleport\" and anchor apple generic and certificate leaf[subject.OU] = \"ZTB359LSTB\""
+    private static let bundledXraySHA256 = "95984ec72638f96f0c576246e91ad2fff978557cf8e37e3e6111ee595030b2f7"
+
     private let bundle: Bundle
     private let shellRunner: PrivilegedShellRunner
 
@@ -16,6 +19,7 @@ struct PrivilegedHelperInstaller: Sendable {
         if isInstalledAndRunning(helperURL: helperURL, runtimeURL: runtimeURL) {
             return
         }
+        try verifyBundleArtifacts(helperURL: helperURL, runtimeURL: runtimeURL)
         try install(helperURL: helperURL, runtimeURL: runtimeURL)
         try waitUntilRunning()
     }
@@ -36,11 +40,60 @@ struct PrivilegedHelperInstaller: Sendable {
 
     private func install(helperURL: URL, runtimeURL: URL) throws {
         let plist = launchDaemonPlist()
-        let script = installScript(helperURL: helperURL, runtimeURL: runtimeURL, plist: plist)
+        let script = installScript(appBundleURL: bundle.bundleURL, helperURL: helperURL, runtimeURL: runtimeURL, plist: plist)
         do {
             try shellRunner.runAdministratorShellScript(script, prompt: administratorPrompt)
         } catch {
             throw PrivilegedHelperInstallerError.installFailed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
+    private func verifyBundleArtifacts(helperURL: URL, runtimeURL: URL) throws {
+        try verifyCodeSignature(at: bundle.bundleURL)
+        try verifyCodeSignature(at: helperURL)
+        try verifyXrayHash(runtimeURL)
+    }
+
+    private func verifyCodeSignature(at url: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = [
+            "--verify",
+            "--strict",
+            "--requirement", Self.codeSigningRequirement,
+            url.path
+        ]
+        let errorPipe = Pipe()
+        process.standardOutput = Pipe()
+        process.standardError = errorPipe
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let stderr = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw PrivilegedHelperInstallerError.installFailed(stderr.isEmpty ? "Teleport bundle signature verification failed." : stderr)
+        }
+    }
+
+    private func verifyXrayHash(_ runtimeURL: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/shasum")
+        process.arguments = ["-a", "256", runtimeURL.path]
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let stderr = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw PrivilegedHelperInstallerError.installFailed(stderr.isEmpty ? "Could not verify bundled Xray runtime." : stderr)
+        }
+        let output = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let digest = output.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+        guard digest.caseInsensitiveCompare(Self.bundledXraySHA256) == .orderedSame else {
+            throw PrivilegedHelperInstallerError.installFailed("Bundled Xray runtime hash verification failed.")
         }
     }
 
@@ -80,22 +133,61 @@ struct PrivilegedHelperInstaller: Sendable {
         """
     }
 
-    private func installScript(helperURL: URL, runtimeURL: URL, plist: String) -> String {
+    private func installScript(appBundleURL: URL, helperURL: URL, runtimeURL: URL, plist: String) -> String {
         let q = PrivilegedShellRunner.shellQuote
         return """
         set -eu
+        APP_BUNDLE=\(q(appBundleURL.path))
         HELPER_SRC=\(q(helperURL.path))
         XRAY_SRC=\(q(runtimeURL.path))
         HELPER_DST=\(q(PrivilegedHelperClient.installedToolPath))
         XRAY_DST=\(q(PrivilegedHelperClient.installedXrayPath))
         PLIST_DST=\(q(PrivilegedHelperClient.launchDaemonPlistPath))
         LABEL=\(q(PrivilegedHelperClient.label))
+        REQUIREMENT=\(q(Self.codeSigningRequirement))
+        EXPECTED_XRAY_SHA256=\(q(Self.bundledXraySHA256))
+
+        verify_signature() {
+            /usr/bin/codesign --verify --strict --requirement "$REQUIREMENT" "$1"
+        }
+
+        verify_xray_hash() {
+            actual_hash=$(/usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}')
+            [ "$actual_hash" = "$EXPECTED_XRAY_SHA256" ] || {
+                echo "Bundled Xray runtime hash verification failed." >&2
+                exit 1
+            }
+        }
+
+        verify_artifacts() {
+            verify_signature "$APP_BUNDLE"
+            verify_signature "$1"
+            verify_xray_hash "$2"
+        }
+
+        verify_artifacts "$HELPER_SRC" "$XRAY_SRC"
+
+        mkdir -p /Library/PrivilegedHelperTools
+        tmp_dir=$(/usr/bin/mktemp -d /Library/PrivilegedHelperTools/.teleport-install.XXXXXX)
+        cleanup() {
+            rm -rf "$tmp_dir"
+        }
+        trap cleanup EXIT
+
+        tmp_helper="$tmp_dir/$(basename "$HELPER_DST")"
+        tmp_xray="$tmp_dir/$(basename "$XRAY_DST")"
+        cp "$HELPER_SRC" "$tmp_helper"
+        cp "$XRAY_SRC" "$tmp_xray"
+        chown root:wheel "$tmp_helper" "$tmp_xray"
+        chmod 755 "$tmp_helper" "$tmp_xray"
+
+        verify_signature "$tmp_helper"
+        verify_xray_hash "$tmp_xray"
 
         launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
         rm -f \(q(PrivilegedHelperClient.socketPath))
-        mkdir -p /Library/PrivilegedHelperTools
-        cp "$HELPER_SRC" "$HELPER_DST"
-        cp "$XRAY_SRC" "$XRAY_DST"
+        mv -f "$tmp_helper" "$HELPER_DST"
+        mv -f "$tmp_xray" "$XRAY_DST"
         chown root:wheel "$HELPER_DST" "$XRAY_DST"
         chmod 755 "$HELPER_DST" "$XRAY_DST"
         cat > "$PLIST_DST" <<'TELEPORT_HELPER_PLIST'
