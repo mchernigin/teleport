@@ -178,7 +178,14 @@ struct ConnectionLinkParser {
             return [:]
         }
 
-        return Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+        var query: [String: String] = [:]
+        for item in queryItems {
+            guard query[item.name] == nil else {
+                throw ConfigurationError.malformedQuery
+            }
+            query[item.name] = item.value ?? ""
+        }
+        return query
     }
 
     nonisolated private func parseTransport(query: [String: String]) throws -> ConnectionTransport {
