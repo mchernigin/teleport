@@ -1021,7 +1021,7 @@ final class AppViewModel: ObservableObject {
         importedConnectionsBySourceID = groupedImportedConnections.reduce(into: [:]) { partialResult, item in
             guard let sourceID = item.key else { return }
             partialResult[sourceID] = item.value.sorted {
-                $0.configuration.displayName.localizedCaseInsensitiveCompare($1.configuration.displayName) == .orderedAscending
+                $0.configuration.displayName.localizedStandardCompare($1.configuration.displayName) == .orderedAscending
             }
         }
 

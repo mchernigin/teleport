@@ -151,10 +151,6 @@ struct ConnectionsSettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(configuration.securityWarningText == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                         }
-
-                        Text(configuration.endpointSummary)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -311,10 +307,6 @@ struct ConnectionsSettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(configuration.securityWarningText == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                         }
-
-                        Text(configuration.endpointSummary)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
                     }
 
                     Spacer(minLength: 0)

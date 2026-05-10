@@ -59,7 +59,7 @@ struct SubscriptionConnectionReconciler {
             )
         }
         .sorted { lhs, rhs in
-            lhs.configuration.displayName.localizedCaseInsensitiveCompare(rhs.configuration.displayName) == .orderedAscending
+            lhs.configuration.displayName.localizedStandardCompare(rhs.configuration.displayName) == .orderedAscending
         }
 
         var updatedConnections = existingConnections.filter { $0.source?.subscriptionSourceID != sourceID }
