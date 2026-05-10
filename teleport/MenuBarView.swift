@@ -80,6 +80,7 @@ struct MenuBarView: View {
             selectedDisplayName: viewModel.selectedConnection?.configuration.displayName ?? "Select connection",
             subtitle: connectionSubtitle,
             canChangeSelection: viewModel.canChangeSelection,
+            showsLatency: viewModel.showsLatencyInMenuBarPicker,
             makeHealthSnapshot: viewModel.healthSnapshotForPicker,
             healthSummary: viewModel.healthSummary(for:),
             onSelect: { id in viewModel.selectConnection(id: id) },
@@ -143,6 +144,7 @@ private struct ConnectionPickerSection: View, Equatable {
     let selectedDisplayName: String
     let subtitle: String
     let canChangeSelection: Bool
+    let showsLatency: Bool
     let makeHealthSnapshot: () -> [UUID: ConnectionHealthCheck]
     let healthSummary: (ConnectionHealthCheck) -> String
     let onSelect: (UUID) -> Void
@@ -158,6 +160,7 @@ private struct ConnectionPickerSection: View, Equatable {
             && lhs.selectedConnectionID == rhs.selectedConnectionID
             && lhs.selectedDisplayName == rhs.selectedDisplayName
             && lhs.canChangeSelection == rhs.canChangeSelection
+            && lhs.showsLatency == rhs.showsLatency
     }
 
     var body: some View {
@@ -252,10 +255,10 @@ private struct ConnectionPickerSection: View, Equatable {
     }
 
     private func connectionLabel(for connection: ConnectionPickerItem) -> String {
-        if let healthCheck = pickerHealthSnapshot[connection.id] {
-            return "\(connection.displayName) • \(healthSummary(healthCheck))"
+        guard showsLatency, let healthCheck = pickerHealthSnapshot[connection.id] else {
+            return connection.displayName
         }
-        return connection.displayName
+        return "\(connection.displayName) • \(healthSummary(healthCheck))"
     }
 }
 

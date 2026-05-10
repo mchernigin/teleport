@@ -54,6 +54,8 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var proxyEndpoint: ProxyEndpoint
     @Published private(set) var connectionMode: ConnectionMode
     @Published private(set) var subscriptionConnectionSort: SubscriptionConnectionSort
+    @Published private(set) var showsLatencyInMenuBarPicker: Bool
+    @Published private(set) var startsAtLogin: Bool
     @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
     @Published private(set) var refreshingHealthConnectionIDs: Set<UUID> = []
     @Published private(set) var queuedHealthConnectionIDs: Set<UUID> = []
@@ -64,6 +66,7 @@ final class AppViewModel: ObservableObject {
     private var connectionBackend: ConnectionBackend
     private let subscriptionClient: SubscriptionClient
     private let healthProbeService: ConnectionHealthProbeService
+    private let loginItemService = LoginItemService()
     private let operationQueue = DispatchQueue(label: "dev.x.teleport.connection-operations", qos: .userInitiated)
     private let persistenceQueue = DispatchQueue(label: "dev.x.teleport.persistence", qos: .utility)
     private lazy var healthProbeQueue = ConnectionHealthProbeQueue(
@@ -119,6 +122,8 @@ final class AppViewModel: ObservableObject {
 
         connectionMode = snapshot.connectionMode
         subscriptionConnectionSort = snapshot.subscriptionConnectionSort
+        showsLatencyInMenuBarPicker = snapshot.showsLatencyInMenuBarPicker
+        startsAtLogin = loginItemService.isEnabled
         connectionBackend = connectionBackendFactory.makeBackend(for: snapshot.connectionMode)
         proxyEndpoint = snapshot.proxyEndpoint
         subscriptionSources = snapshot.subscriptionSources
@@ -531,6 +536,27 @@ final class AppViewModel: ObservableObject {
         guard sort != subscriptionConnectionSort else { return }
         subscriptionConnectionSort = sort
         schedulePersist()
+    }
+
+    func setShowsLatencyInMenuBarPicker(_ showsLatency: Bool) {
+        guard showsLatency != showsLatencyInMenuBarPicker else { return }
+        showsLatencyInMenuBarPicker = showsLatency
+        schedulePersist()
+    }
+
+    func refreshStartsAtLoginStatus() {
+        startsAtLogin = loginItemService.isEnabled
+    }
+
+    func setStartsAtLogin(_ startsAtLogin: Bool) {
+        do {
+            try loginItemService.setEnabled(startsAtLogin)
+            self.startsAtLogin = loginItemService.isEnabled
+            setStoredError(nil)
+        } catch {
+            self.startsAtLogin = loginItemService.isEnabled
+            setStoredError(error.localizedDescription)
+        }
     }
 
     func connect() {
@@ -1159,7 +1185,8 @@ final class AppViewModel: ObservableObject {
             selectedConnectionID: selectedConnectionID ?? savedConnections.first?.id,
             proxyEndpoint: proxyEndpoint,
             connectionMode: connectionMode,
-            subscriptionConnectionSort: subscriptionConnectionSort
+            subscriptionConnectionSort: subscriptionConnectionSort,
+            showsLatencyInMenuBarPicker: showsLatencyInMenuBarPicker
         )
     }
 

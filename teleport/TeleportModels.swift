@@ -501,6 +501,7 @@ struct AppSnapshot: Codable, Equatable {
     var proxyEndpoint: ProxyEndpoint
     var connectionMode: ConnectionMode
     var subscriptionConnectionSort: SubscriptionConnectionSort
+    var showsLatencyInMenuBarPicker: Bool
 
     init(
         savedConnections: [SavedConnection],
@@ -508,7 +509,8 @@ struct AppSnapshot: Codable, Equatable {
         selectedConnectionID: UUID?,
         proxyEndpoint: ProxyEndpoint,
         connectionMode: ConnectionMode = .vpn,
-        subscriptionConnectionSort: SubscriptionConnectionSort = .name
+        subscriptionConnectionSort: SubscriptionConnectionSort = .name,
+        showsLatencyInMenuBarPicker: Bool = true
     ) {
         self.savedConnections = savedConnections
         self.subscriptionSources = subscriptionSources
@@ -516,6 +518,7 @@ struct AppSnapshot: Codable, Equatable {
         self.proxyEndpoint = proxyEndpoint
         self.connectionMode = connectionMode
         self.subscriptionConnectionSort = subscriptionConnectionSort
+        self.showsLatencyInMenuBarPicker = showsLatencyInMenuBarPicker
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -525,6 +528,7 @@ struct AppSnapshot: Codable, Equatable {
         case proxyEndpoint
         case connectionMode
         case subscriptionConnectionSort
+        case showsLatencyInMenuBarPicker
     }
 
     init(from decoder: Decoder) throws {
@@ -535,6 +539,7 @@ struct AppSnapshot: Codable, Equatable {
         proxyEndpoint = try container.decodeIfPresent(ProxyEndpoint.self, forKey: .proxyEndpoint) ?? .default
         connectionMode = try container.decodeIfPresent(ConnectionMode.self, forKey: .connectionMode) ?? .vpn
         subscriptionConnectionSort = try container.decodeIfPresent(SubscriptionConnectionSort.self, forKey: .subscriptionConnectionSort) ?? .name
+        showsLatencyInMenuBarPicker = try container.decodeIfPresent(Bool.self, forKey: .showsLatencyInMenuBarPicker) ?? true
     }
 }
 

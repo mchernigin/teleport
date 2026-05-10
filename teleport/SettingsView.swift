@@ -67,14 +67,10 @@ private struct GeneralSettingsView: View {
                         Text(mode.displayName).tag(mode)
                     }
                 } label: {
-                    Text("Teleport Mode")
-                    Text("System Proxy routes apps that respect macOS proxy settings. VPN routes the whole device through Xray TUN and requires administrator approval.")
+                    Text("Teleport mode")
+                    Text("System Proxy routes apps that respect macOS proxy settings. VPN routes the whole device through Xray TUN and requires administrator approval. Disconnect before changing modes.")
                 }
                 .disabled(!viewModel.canChangeSelection || viewModel.hasActiveConnectionSession)
-            } footer: {
-                if viewModel.hasActiveConnectionSession {
-                    Text("Disconnect before changing connection mode.")
-                }
             }
 
             Section {
@@ -88,11 +84,31 @@ private struct GeneralSettingsView: View {
                         Text(sort.displayName).tag(sort)
                     }
                 } label: {
-                    Text("Subscription Sorting")
+                    Text("Configs order")
                     Text("Choose how imported subscription configs are ordered in Settings and the menu bar picker.")
                 }
-            } footer: {
-                Text("Latency sorting uses the latest health check results. Configs without measured latency are shown after measured configs.")
+
+                Toggle(
+                    isOn: Binding(
+                        get: { viewModel.showsLatencyInMenuBarPicker },
+                        set: { viewModel.setShowsLatencyInMenuBarPicker($0) }
+                    )
+                ) {
+                    Text("Show latency in menu bar picker")
+                    Text("Include latest health check latency next to connection names.")
+                }
+            }
+
+            Section {
+                Toggle(
+                    isOn: Binding(
+                        get: { viewModel.startsAtLogin },
+                        set: { viewModel.setStartsAtLogin($0) }
+                    )
+                ) {
+                    Text("Launch at login")
+                    Text("Start Teleport automatically when you sign in.")
+                }
             }
         }
         .formStyle(.grouped)
@@ -100,6 +116,9 @@ private struct GeneralSettingsView: View {
         .padding(.leading, -8)
         .padding(.trailing, -6)
         .navigationTitle("General")
+        .onAppear {
+            viewModel.refreshStartsAtLoginStatus()
+        }
     }
 }
 
