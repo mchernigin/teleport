@@ -491,14 +491,18 @@ final class AppViewModel: ObservableObject {
             return
         }
 
-        connectionBackend.teardown()
+        let previousBackend = connectionBackend
         connectionMode = mode
         connectionBackend = connectionBackendFactory.makeBackend(for: mode)
         proxyPhase = .disabled
         connectionPhase = savedConnections.isEmpty ? .unconfigured : .stopped
         setStoredError(nil)
         updateMenuBarAnimation()
-        persistSettingError()
+        schedulePersist()
+
+        operationQueue.async {
+            previousBackend.teardown()
+        }
     }
 
     func connect() {
