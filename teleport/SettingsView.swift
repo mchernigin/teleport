@@ -132,7 +132,6 @@ private struct NerdShitSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            statsSection
             logSection
         }
         .padding(.horizontal, 16)
@@ -147,22 +146,6 @@ private struct NerdShitSettingsView: View {
         }
     }
 
-    private var statsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Stats")
-                .font(.headline)
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), alignment: .leading)], alignment: .leading, spacing: 10) {
-                statCard("Status", viewModel.statusSummary)
-                statCard("Mode", viewModel.connectionMode.displayName)
-                statCard("Connection", viewModel.selectedConnection?.configuration.displayName ?? "None")
-                statCard("Phase", "Xray: \(viewModel.connectionPhase.rawValue) • Proxy: \(viewModel.proxyPhase.rawValue)")
-                statCard("Connections", "\(viewModel.savedConnections.count) saved • \(viewModel.subscriptionSources.count) subs")
-                statCard("Local proxy", "HTTP :\(viewModel.proxyEndpoint.httpPort) • SOCKS :\(viewModel.proxyEndpoint.socksPort)")
-            }
-        }
-    }
-
     private var logSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Xray logs")
@@ -174,27 +157,20 @@ private struct NerdShitSettingsView: View {
                         Text(logFile.title).tag(logFile)
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 460, alignment: .leading)
+                .pickerStyle(.menu)
+                .frame(width: 180, alignment: .leading)
 
                 Spacer(minLength: 8)
 
-                Menu {
-                    Button("Refresh") {
-                        refreshLog()
-                    }
-
-                    Button("Copy Log") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(logText, forType: .string)
-                    }
-                    .disabled(logText.isEmpty)
-
-                } label: {
-                    Label("Actions", systemImage: "ellipsis.circle")
+                Button("Refresh", systemImage: "arrow.clockwise") {
+                    refreshLog()
                 }
-                .fixedSize()
+
+                Button("Copy Log", systemImage: "doc.on.doc") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(logText, forType: .string)
+                }
+                .disabled(logText.isEmpty)
             }
 
             Text(logMetadata)
@@ -212,20 +188,6 @@ private struct NerdShitSettingsView: View {
                 )
         }
         .frame(maxHeight: .infinity, alignment: .top)
-    }
-
-    private func statCard(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.subheadline)
-                .lineLimit(2)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, minHeight: 58, alignment: .topLeading)
-        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func refreshLog() {
