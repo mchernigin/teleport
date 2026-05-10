@@ -28,14 +28,22 @@ final class AppViewModel: ObservableObject {
     private let healthProbeService: ConnectionHealthProbeService
     private let operationQueue = DispatchQueue(label: "dev.x.teleport.connection-operations", qos: .userInitiated)
     private let persistenceQueue = DispatchQueue(label: "dev.x.teleport.persistence", qos: .utility)
-    // Full tunnel probes spin up temporary Xray instances; allow a wider fan-out for bulk checks.
-    private let healthProbeConcurrencyLimit = 10
+    private lazy var healthProbeQueue = ConnectionHealthProbeQueue(
+        healthProbeService: healthProbeService,
+        // Full tunnel probes spin up temporary Xray instances; allow a wider fan-out for bulk checks.
+        concurrencyLimit: 10,
+        connectionLookup: { [weak self] id in
+            self?.savedConnectionsByID[id]
+        },
+        stateDidChange: { [weak self] refreshingIDs, queuedIDs in
+            self?.refreshingHealthConnectionIDs = refreshingIDs
+            self?.queuedHealthConnectionIDs = queuedIDs
+        },
+        resultsDidFlush: { [weak self] results in
+            self?.applyHealthProbeResults(results)
+        }
+    )
     private var autoRefreshTimerCancellable: AnyCancellable?
-    private var pendingHealthProbeIDs: [UUID] = []
-    private var pendingHealthProbeIDSet: Set<UUID> = []
-    private var activeHealthProbeTasks: [UUID: Task<Void, Never>] = [:]
-    private var pendingHealthProbeResults: [UUID: ConnectionHealthProbeResult] = [:]
-    private var applyHealthResultsWorkItem: DispatchWorkItem?
     private var persistWorkItem: DispatchWorkItem?
     private var savedConnectionsByID: [UUID: SavedConnection] = [:]
     private var importedConnectionsBySourceID: [UUID: [SavedConnection]] = [:]
@@ -708,68 +716,12 @@ final class AppViewModel: ObservableObject {
         sourceID: UUID,
         filterDuplicateImports: Bool
     ) throws -> SubscriptionImportResult {
-        var importedEntries: [ImportedSubscriptionEntry] = []
-        var skippedCount = 0
-        var seenDuplicateKeys: Set<String> = []
-
-        for rawLink in links {
-            do {
-                let configuration = try parser.parse(rawLink)
-                let sourceEntryID = rawLink.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                if filterDuplicateImports {
-                    let duplicateKey = configuration.duplicateFilterIdentity
-                    guard seenDuplicateKeys.insert(duplicateKey).inserted else {
-                        continue
-                    }
-                }
-
-                importedEntries.append(
-                    ImportedSubscriptionEntry(
-                        sourceEntryID: sourceEntryID,
-                        configuration: configuration
-                    )
-                )
-            } catch {
-                skippedCount += 1
-            }
-        }
-
-        _ = sourceID
-
-        guard !importedEntries.isEmpty else {
-            throw SubscriptionError.noSupportedEntries
-        }
-
-        return SubscriptionImportResult(
-            importedEntries: disambiguateDuplicateDisplayNames(in: importedEntries),
-            skippedCount: skippedCount
+        try SubscriptionImportProcessor.importEntries(
+            links: links,
+            parser: parser,
+            sourceID: sourceID,
+            filterDuplicateImports: filterDuplicateImports
         )
-    }
-
-    nonisolated private static func disambiguateDuplicateDisplayNames(in entries: [ImportedSubscriptionEntry]) -> [ImportedSubscriptionEntry] {
-        let countsByName = entries.reduce(into: [String: Int]()) { counts, entry in
-            counts[displayNameKey(for: entry.configuration), default: 0] += 1
-        }
-        var indexesByName: [String: Int] = [:]
-
-        return entries.map { entry in
-            let key = displayNameKey(for: entry.configuration)
-            guard countsByName[key, default: 0] > 1 else { return entry }
-
-            indexesByName[key, default: 0] += 1
-            let disambiguatedName = "\(entry.configuration.displayName) (\(indexesByName[key, default: 1]))"
-            return ImportedSubscriptionEntry(
-                sourceEntryID: entry.sourceEntryID,
-                configuration: entry.configuration.withDisplayName(disambiguatedName)
-            )
-        }
-    }
-
-    nonisolated private static func displayNameKey(for configuration: ConnectionConfiguration) -> String {
-        configuration.displayName
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
     }
 
     private func applyImportedEntries(
@@ -885,99 +837,14 @@ final class AppViewModel: ObservableObject {
         enqueueHealthProbes(for: [selectedConnectionID], force: false, priority: true)
     }
 
-    private func needsHealthRefresh(for connection: SavedConnection) -> Bool {
-        guard let healthCheck = connection.healthCheck else {
-            return true
-        }
-
-        switch healthCheck.state {
-        case .unknown, .queued, .checking:
-            return true
-        case .reachable, .unreachable:
-            return false
-        }
-    }
-
     private func enqueueHealthProbes(for ids: [UUID], force: Bool, priority: Bool) {
-        guard !ids.isEmpty else { return }
-
-        var prioritizedIDs: [UUID] = []
-
-        for id in ids {
-            guard let connection = savedConnectionsByID[id] else { continue }
-            guard force || needsHealthRefresh(for: connection) else { continue }
-            guard activeHealthProbeTasks[id] == nil else { continue }
-            guard !pendingHealthProbeIDSet.contains(id) else { continue }
-
-            if priority {
-                prioritizedIDs.append(id)
-            } else {
-                pendingHealthProbeIDs.append(id)
-            }
-            pendingHealthProbeIDSet.insert(id)
-        }
-
-        queuedHealthConnectionIDs = pendingHealthProbeIDSet
-
-        if priority, !prioritizedIDs.isEmpty {
-            pendingHealthProbeIDs.insert(contentsOf: prioritizedIDs, at: 0)
-        }
-
-        drainHealthProbeQueue()
+        healthProbeQueue.enqueue(ids: ids, force: force, priority: priority)
     }
 
-    private func drainHealthProbeQueue() {
-        while activeHealthProbeTasks.count < healthProbeConcurrencyLimit,
-              let nextID = pendingHealthProbeIDs.first {
-            pendingHealthProbeIDs.removeFirst()
-            pendingHealthProbeIDSet.remove(nextID)
-            queuedHealthConnectionIDs = pendingHealthProbeIDSet
-
-            guard let connection = savedConnectionsByID[nextID] else {
-                continue
-            }
-
-            refreshingHealthConnectionIDs.insert(nextID)
-            let task = Task.detached(priority: .utility) { [healthProbeService, connection, nextID] in
-                let result = await healthProbeService.probe(connection)
-                await MainActor.run {
-                    self.enqueueHealthProbeResult(result, for: nextID)
-                }
-            }
-            activeHealthProbeTasks[nextID] = task
-        }
-    }
-
-    private func enqueueHealthProbeResult(_ result: ConnectionHealthProbeResult, for connectionID: UUID) {
-        activeHealthProbeTasks[connectionID] = nil
-        pendingHealthProbeResults[connectionID] = result
-        scheduleHealthResultApplication()
-        drainHealthProbeQueue()
-    }
-
-    private func scheduleHealthResultApplication() {
-        guard applyHealthResultsWorkItem == nil else { return }
-
-        let workItem = DispatchWorkItem { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.applyPendingHealthProbeResults()
-            }
-        }
-
-        applyHealthResultsWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
-    }
-
-    private func applyPendingHealthProbeResults() {
-        applyHealthResultsWorkItem = nil
-        guard !pendingHealthProbeResults.isEmpty else { return }
-
-        let pendingResults = pendingHealthProbeResults
-        pendingHealthProbeResults = [:]
+    private func applyHealthProbeResults(_ pendingResults: [UUID: ConnectionHealthProbeResult]) {
+        guard !pendingResults.isEmpty else { return }
 
         for (connectionID, result) in pendingResults {
-            refreshingHealthConnectionIDs.remove(connectionID)
-
             guard let index = savedConnections.firstIndex(where: { $0.id == connectionID }) else {
                 continue
             }
@@ -996,19 +863,11 @@ final class AppViewModel: ObservableObject {
     }
 
     private func cancelHealthProbe(id: UUID) {
-        activeHealthProbeTasks[id]?.cancel()
-        activeHealthProbeTasks[id] = nil
-        refreshingHealthConnectionIDs.remove(id)
-        pendingHealthProbeIDSet.remove(id)
-        queuedHealthConnectionIDs = pendingHealthProbeIDSet
-        pendingHealthProbeIDs.removeAll { $0 == id }
+        healthProbeQueue.cancel(id: id)
     }
 
     private func cancelHealthProbes(ids: Set<UUID>) {
-        guard !ids.isEmpty else { return }
-        for id in ids {
-            cancelHealthProbe(id: id)
-        }
+        healthProbeQueue.cancel(ids: ids)
     }
 
     private func invalidateHealthChecksForImportedConnections(from sourceID: UUID) {
