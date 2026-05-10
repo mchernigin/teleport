@@ -148,9 +148,6 @@ private struct NerdShitSettingsView: View {
                     }
                     .disabled(logText.isEmpty)
 
-                    Button("Open Logs Folder") {
-                        NSWorkspace.shared.open(selectedLog.directoryURL)
-                    }
                 } label: {
                     Label("Actions", systemImage: "ellipsis.circle")
                 }
@@ -340,15 +337,6 @@ private enum NerdLogFile: String, CaseIterable, Identifiable, Hashable {
             return Self.helperStateDirectoryURL.appendingPathComponent("xray-tun.log")
         case .vpnControl:
             return Self.helperStateDirectoryURL.appendingPathComponent("xray-tun-control.log")
-        }
-    }
-
-    var directoryURL: URL {
-        switch self {
-        case .systemProxy:
-            return Self.applicationSupportDirectoryURL
-        case .vpn, .vpnControl:
-            return Self.helperStateDirectoryURL
         }
     }
 
