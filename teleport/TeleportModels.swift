@@ -490,7 +490,7 @@ struct AppSnapshot: Codable, Equatable {
         subscriptionSources: [SubscriptionSource] = [],
         selectedConnectionID: UUID?,
         proxyEndpoint: ProxyEndpoint,
-        connectionMode: ConnectionMode = .systemProxy
+        connectionMode: ConnectionMode = .vpn
     ) {
         self.savedConnections = savedConnections
         self.subscriptionSources = subscriptionSources
@@ -513,7 +513,7 @@ struct AppSnapshot: Codable, Equatable {
         subscriptionSources = try container.decodeIfPresent([SubscriptionSource].self, forKey: .subscriptionSources) ?? []
         selectedConnectionID = try container.decodeIfPresent(UUID.self, forKey: .selectedConnectionID)
         proxyEndpoint = try container.decodeIfPresent(ProxyEndpoint.self, forKey: .proxyEndpoint) ?? .default
-        connectionMode = try container.decodeIfPresent(ConnectionMode.self, forKey: .connectionMode) ?? .systemProxy
+        connectionMode = try container.decodeIfPresent(ConnectionMode.self, forKey: .connectionMode) ?? .vpn
     }
 }
 
