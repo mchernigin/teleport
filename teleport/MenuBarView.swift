@@ -74,7 +74,7 @@ struct MenuBarView: View {
         ConnectionPickerSection(
             savedConnectionCount: viewModel.savedConnections.count,
             manualItems: viewModel.manualConnectionPickerItems,
-            subscriptionSources: viewModel.subscriptionSources,
+            subscriptionItems: viewModel.subscriptionPickerItems,
             importedItemsBySourceID: viewModel.importedConnectionPickerItemsBySourceID,
             selectedConnectionID: viewModel.selectedConnectionID,
             selectedDisplayName: viewModel.selectedConnection?.configuration.displayName ?? "Select connection",
@@ -137,7 +137,7 @@ struct MenuBarView: View {
 private struct ConnectionPickerSection: View, Equatable {
     let savedConnectionCount: Int
     let manualItems: [ConnectionPickerItem]
-    let subscriptionSources: [SubscriptionSource]
+    let subscriptionItems: [SubscriptionPickerItem]
     let importedItemsBySourceID: [UUID: [ConnectionPickerItem]]
     let selectedConnectionID: UUID?
     let selectedDisplayName: String
@@ -153,7 +153,7 @@ private struct ConnectionPickerSection: View, Equatable {
     static func == (lhs: ConnectionPickerSection, rhs: ConnectionPickerSection) -> Bool {
         lhs.savedConnectionCount == rhs.savedConnectionCount
             && lhs.manualItems == rhs.manualItems
-            && lhs.subscriptionSources == rhs.subscriptionSources
+            && lhs.subscriptionItems == rhs.subscriptionItems
             && lhs.importedItemsBySourceID == rhs.importedItemsBySourceID
             && lhs.selectedConnectionID == rhs.selectedConnectionID
             && lhs.selectedDisplayName == rhs.selectedDisplayName
@@ -181,9 +181,9 @@ private struct ConnectionPickerSection: View, Equatable {
                         }
                     }
 
-                    if !subscriptionSources.isEmpty {
+                    if !subscriptionItems.isEmpty {
                         Section("Subscriptions") {
-                            ForEach(subscriptionSources) { source in
+                            ForEach(subscriptionItems) { source in
                                 subscriptionMenu(source)
                             }
                         }
@@ -223,7 +223,7 @@ private struct ConnectionPickerSection: View, Equatable {
     }
 
     @ViewBuilder
-    private func subscriptionMenu(_ source: SubscriptionSource) -> some View {
+    private func subscriptionMenu(_ source: SubscriptionPickerItem) -> some View {
         let connections = importedItemsBySourceID[source.id] ?? []
 
         Menu {

@@ -18,9 +18,20 @@ struct ConnectionPickerItem: Identifiable, Equatable {
     }
 }
 
+struct SubscriptionPickerItem: Identifiable, Equatable {
+    let id: UUID
+    let displayName: String
+
+    init(source: SubscriptionSource) {
+        id = source.id
+        displayName = source.displayName
+    }
+}
+
 final class AppViewModel: ObservableObject {
     @Published private(set) var savedConnections: [SavedConnection]
     @Published private(set) var connectionPickerItems: [ConnectionPickerItem] = []
+    @Published private(set) var subscriptionPickerItems: [SubscriptionPickerItem] = []
     @Published private(set) var healthChecksByConnectionID: [UUID: ConnectionHealthCheck] = [:]
     @Published private(set) var subscriptionSources: [SubscriptionSource]
     @Published private(set) var selectedConnectionID: UUID?
@@ -970,6 +981,14 @@ final class AppViewModel: ObservableObject {
         guard let index = subscriptionSources.firstIndex(where: { $0.id == id }) else { return }
         mutate(&subscriptionSources[index])
         subscriptionSourcesByID[id] = subscriptionSources[index]
+        let pickerItem = SubscriptionPickerItem(source: subscriptionSources[index])
+        if let pickerIndex = subscriptionPickerItems.firstIndex(where: { $0.id == id }) {
+            if subscriptionPickerItems[pickerIndex] != pickerItem {
+                subscriptionPickerItems[pickerIndex] = pickerItem
+            }
+        } else {
+            subscriptionPickerItems = subscriptionSources.map(SubscriptionPickerItem.init)
+        }
     }
 
     private func rebuildSavedConnectionIndexes() {
@@ -994,6 +1013,7 @@ final class AppViewModel: ObservableObject {
 
     private func rebuildSubscriptionSourceIndexes() {
         subscriptionSourcesByID = Dictionary(uniqueKeysWithValues: subscriptionSources.map { ($0.id, $0) })
+        subscriptionPickerItems = subscriptionSources.map(SubscriptionPickerItem.init)
     }
 
     private func recoverSelection(afterRemovingConnectionAt index: Int) {
