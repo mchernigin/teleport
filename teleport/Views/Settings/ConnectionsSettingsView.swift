@@ -104,6 +104,9 @@ struct ConnectionsSettingsView: View {
                 }
             }
         }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sheet(isPresented: $isShowingAddSheet) {
             AddConnectionSheet(viewModel: viewModel)
         }

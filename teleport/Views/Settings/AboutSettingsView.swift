@@ -37,6 +37,8 @@ struct AboutSettingsView: View {
 
             Spacer(minLength: 0)
         }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             refreshXrayVersion()

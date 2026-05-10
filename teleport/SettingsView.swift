@@ -7,22 +7,31 @@ struct SettingsView: View {
     @State private var selectedSection: SettingsSection? = .general
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: .constant(.all)) {
             List(SettingsSection.allCases, selection: $selectedSection) { section in
-                NavigationLink(value: section) {
-                    Label(section.title, systemImage: section.systemImage)
-                }
+                Label(section.title, systemImage: section.systemImage)
+                    .tag(section as SettingsSection?)
             }
             .listStyle(.sidebar)
-            .navigationTitle("Settings")
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
+            .frame(minWidth: 200, maxHeight: .infinity)
+            .navigationSplitViewColumnWidth(200)
+            .toolbar(removing: .sidebarToggle)
         } detail: {
             selectedSectionView
-                .padding(16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .navigationTitle((selectedSection ?? .general).title)
         }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Color.clear.frame(width: 0, height: 0)
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 760, minHeight: 500)
+        .onAppear {
+            if selectedSection == nil {
+                selectedSection = .general
+            }
+        }
     }
 
     @ViewBuilder
@@ -46,20 +55,9 @@ private struct GeneralSettingsView: View {
     @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            connectionModeSection
-            Spacer(minLength: 0)
-        }
-    }
-
-    private var connectionModeSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Mode")
-                    .font(.subheadline.weight(.semibold))
-
+        Form {
+            Section {
                 Picker(
-                    "Mode",
                     selection: Binding(
                         get: { viewModel.connectionMode },
                         set: { viewModel.selectConnectionMode($0) }
@@ -68,17 +66,18 @@ private struct GeneralSettingsView: View {
                     ForEach(ConnectionMode.allCases) { mode in
                         Text(mode.displayName).tag(mode)
                     }
+                } label: {
+                    Text("Mode")
+                    Text(viewModel.connectionMode.description)
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 220)
                 .disabled(!viewModel.canChangeSelection)
             }
-
-            Text(viewModel.connectionMode.description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
+        .formStyle(.grouped)
+        .padding(.top, -20)
+        .padding(.leading, -8)
+        .padding(.trailing, -6)
+        .navigationTitle("General")
     }
 }
 
@@ -95,6 +94,9 @@ private struct NerdShitSettingsView: View {
             statsSection
             logSection
         }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             selectedLog = viewModel.connectionMode == .vpn ? .vpn : .systemProxy
             refreshLog()
@@ -357,6 +359,7 @@ private struct RoutingSettingsView: View {
             systemImage: "point.topleft.down.curvedto.point.bottomright.up",
             description: Text("Routing controls will live here.")
         )
+        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
