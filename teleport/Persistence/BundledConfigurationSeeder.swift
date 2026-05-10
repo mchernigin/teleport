@@ -67,7 +67,8 @@ struct BundledConfigurationSeeder {
             subscriptionSources: subscriptionSources,
             selectedConnectionID: selectedConnectionID,
             proxyEndpoint: snapshot.proxyEndpoint,
-            connectionMode: snapshot.connectionMode
+            connectionMode: snapshot.connectionMode,
+            subscriptionConnectionSort: snapshot.subscriptionConnectionSort
         )
     }
 }

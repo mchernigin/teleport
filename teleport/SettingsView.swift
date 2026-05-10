@@ -76,6 +76,24 @@ private struct GeneralSettingsView: View {
                     Text("Disconnect before changing connection mode.")
                 }
             }
+
+            Section {
+                Picker(
+                    selection: Binding(
+                        get: { viewModel.subscriptionConnectionSort },
+                        set: { viewModel.selectSubscriptionConnectionSort($0) }
+                    )
+                ) {
+                    ForEach(SubscriptionConnectionSort.allCases) { sort in
+                        Text(sort.displayName).tag(sort)
+                    }
+                } label: {
+                    Text("Subscription Sorting")
+                    Text("Choose how imported subscription configs are ordered in Settings and the menu bar picker.")
+                }
+            } footer: {
+                Text("Latency sorting uses the latest health check results. Configs without measured latency are shown after measured configs.")
+            }
         }
         .formStyle(.grouped)
         .padding(.top, -20)

@@ -43,6 +43,22 @@ enum ConnectionMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum SubscriptionConnectionSort: String, Codable, CaseIterable, Identifiable {
+    case name
+    case latency
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .name:
+            return "Name"
+        case .latency:
+            return "Latency"
+        }
+    }
+}
+
 enum ConnectionHealthState: String, Codable {
     case unknown
     case queued
@@ -484,19 +500,22 @@ struct AppSnapshot: Codable, Equatable {
     var selectedConnectionID: UUID?
     var proxyEndpoint: ProxyEndpoint
     var connectionMode: ConnectionMode
+    var subscriptionConnectionSort: SubscriptionConnectionSort
 
     init(
         savedConnections: [SavedConnection],
         subscriptionSources: [SubscriptionSource] = [],
         selectedConnectionID: UUID?,
         proxyEndpoint: ProxyEndpoint,
-        connectionMode: ConnectionMode = .vpn
+        connectionMode: ConnectionMode = .vpn,
+        subscriptionConnectionSort: SubscriptionConnectionSort = .name
     ) {
         self.savedConnections = savedConnections
         self.subscriptionSources = subscriptionSources
         self.selectedConnectionID = selectedConnectionID
         self.proxyEndpoint = proxyEndpoint
         self.connectionMode = connectionMode
+        self.subscriptionConnectionSort = subscriptionConnectionSort
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -505,6 +524,7 @@ struct AppSnapshot: Codable, Equatable {
         case selectedConnectionID
         case proxyEndpoint
         case connectionMode
+        case subscriptionConnectionSort
     }
 
     init(from decoder: Decoder) throws {
@@ -514,6 +534,7 @@ struct AppSnapshot: Codable, Equatable {
         selectedConnectionID = try container.decodeIfPresent(UUID.self, forKey: .selectedConnectionID)
         proxyEndpoint = try container.decodeIfPresent(ProxyEndpoint.self, forKey: .proxyEndpoint) ?? .default
         connectionMode = try container.decodeIfPresent(ConnectionMode.self, forKey: .connectionMode) ?? .vpn
+        subscriptionConnectionSort = try container.decodeIfPresent(SubscriptionConnectionSort.self, forKey: .subscriptionConnectionSort) ?? .name
     }
 }
 

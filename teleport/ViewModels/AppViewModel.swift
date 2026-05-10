@@ -28,6 +28,18 @@ struct SubscriptionPickerItem: Identifiable, Equatable {
     }
 }
 
+private struct LatencySortKey: Comparable, Equatable {
+    let group: Int
+    let latency: Int
+
+    static func < (lhs: LatencySortKey, rhs: LatencySortKey) -> Bool {
+        if lhs.group != rhs.group {
+            return lhs.group < rhs.group
+        }
+        return lhs.latency < rhs.latency
+    }
+}
+
 final class AppViewModel: ObservableObject {
     @Published private(set) var savedConnections: [SavedConnection]
     @Published private(set) var connectionPickerItems: [ConnectionPickerItem] = []
@@ -41,6 +53,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var lastErrorDetails: String?
     @Published private(set) var proxyEndpoint: ProxyEndpoint
     @Published private(set) var connectionMode: ConnectionMode
+    @Published private(set) var subscriptionConnectionSort: SubscriptionConnectionSort
     @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
     @Published private(set) var refreshingHealthConnectionIDs: Set<UUID> = []
     @Published private(set) var queuedHealthConnectionIDs: Set<UUID> = []
@@ -105,6 +118,7 @@ final class AppViewModel: ObservableObject {
         }
 
         connectionMode = snapshot.connectionMode
+        subscriptionConnectionSort = snapshot.subscriptionConnectionSort
         connectionBackend = connectionBackendFactory.makeBackend(for: snapshot.connectionMode)
         proxyEndpoint = snapshot.proxyEndpoint
         subscriptionSources = snapshot.subscriptionSources
@@ -200,18 +214,16 @@ final class AppViewModel: ObservableObject {
     }
 
     func importedConnections(for sourceID: UUID) -> [SavedConnection] {
-        importedConnectionsBySourceID[sourceID] ?? []
+        sortedImportedConnections(importedConnectionsBySourceID[sourceID] ?? [])
     }
 
     func importedConnectionPickerItems(for sourceID: UUID) -> [ConnectionPickerItem] {
-        connectionPickerItems.filter { $0.sourceID == sourceID }
+        importedConnections(for: sourceID).map(ConnectionPickerItem.init)
     }
 
     var importedConnectionPickerItemsBySourceID: [UUID: [ConnectionPickerItem]] {
-        Dictionary(grouping: connectionPickerItems.compactMap { item -> ConnectionPickerItem? in
-            item.sourceID == nil ? nil : item
-        }) { item in
-            item.sourceID!
+        importedConnectionsBySourceID.reduce(into: [:]) { partialResult, item in
+            partialResult[item.key] = sortedImportedConnections(item.value).map(ConnectionPickerItem.init)
         }
     }
 
@@ -503,6 +515,12 @@ final class AppViewModel: ObservableObject {
         operationQueue.async {
             previousBackend.teardown()
         }
+    }
+
+    func selectSubscriptionConnectionSort(_ sort: SubscriptionConnectionSort) {
+        guard sort != subscriptionConnectionSort else { return }
+        subscriptionConnectionSort = sort
+        schedulePersist()
     }
 
     func connect() {
@@ -1005,13 +1023,45 @@ final class AppViewModel: ObservableObject {
 
         importedConnectionsBySourceID = groupedImportedConnections.reduce(into: [:]) { partialResult, item in
             guard let sourceID = item.key else { return }
-            partialResult[sourceID] = item.value.sorted {
-                $0.configuration.displayName.localizedStandardCompare($1.configuration.displayName) == .orderedAscending
-            }
+            partialResult[sourceID] = item.value
         }
 
         importedConnectionCountsBySourceID = importedConnectionsBySourceID.reduce(into: [:]) { partialResult, item in
             partialResult[item.key] = item.value.count
+        }
+    }
+
+    private func sortedImportedConnections(_ connections: [SavedConnection]) -> [SavedConnection] {
+        connections.sorted { lhs, rhs in
+            switch subscriptionConnectionSort {
+            case .name:
+                return compareByName(lhs, rhs)
+            case .latency:
+                let lhsKey = latencySortKey(for: lhs)
+                let rhsKey = latencySortKey(for: rhs)
+                if lhsKey != rhsKey {
+                    return lhsKey < rhsKey
+                }
+                return compareByName(lhs, rhs)
+            }
+        }
+    }
+
+    private func compareByName(_ lhs: SavedConnection, _ rhs: SavedConnection) -> Bool {
+        lhs.configuration.displayName.localizedStandardCompare(rhs.configuration.displayName) == .orderedAscending
+    }
+
+    private func latencySortKey(for connection: SavedConnection) -> LatencySortKey {
+        let healthCheck = healthChecksByConnectionID[connection.id] ?? connection.healthCheck ?? .unknown
+        switch healthCheck.state {
+        case .reachable:
+            return LatencySortKey(group: healthCheck.latencyMilliseconds == nil ? 1 : 0, latency: healthCheck.latencyMilliseconds ?? Int.max)
+        case .checking, .queued:
+            return LatencySortKey(group: 2, latency: Int.max)
+        case .unknown:
+            return LatencySortKey(group: 3, latency: Int.max)
+        case .unreachable:
+            return LatencySortKey(group: 4, latency: Int.max)
         }
     }
 
@@ -1098,7 +1148,8 @@ final class AppViewModel: ObservableObject {
             subscriptionSources: subscriptionSources,
             selectedConnectionID: selectedConnectionID ?? savedConnections.first?.id,
             proxyEndpoint: proxyEndpoint,
-            connectionMode: connectionMode
+            connectionMode: connectionMode,
+            subscriptionConnectionSort: subscriptionConnectionSort
         )
     }
 
