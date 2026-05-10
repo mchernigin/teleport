@@ -7,16 +7,22 @@ import Network
 import SystemConfiguration
 
 final class ConfigurationStore {
+    private let fileManager: FileManager
     private let fileURL: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
         let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let directory = baseURL.appendingPathComponent("teleport", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         fileURL = directory.appendingPathComponent("state.json")
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    }
+
+    var hasSavedSnapshot: Bool {
+        fileManager.fileExists(atPath: fileURL.path)
     }
 
     func load() -> AppSnapshot {

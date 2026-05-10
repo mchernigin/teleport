@@ -73,6 +73,16 @@ just clean
 
 You can also open `teleport.xcodeproj` in Xcode and run the `teleport` scheme.
 
+## Built-in subscriptions and configs
+
+Initial subscriptions and manual configs are defined in:
+
+```text
+packaging/bundled-connections.json
+```
+
+On first launch only, Teleport seeds a missing user state file from this bundled JSON. Subscription entries support `url`, `displayName`, `autoUpdateIntervalMinutes`, and `filterDuplicateImports`. Manual config entries support `link` and optional `displayName`.
+
 ## Verification scripts
 
 Use the `justfile` to run focused verification scripts:

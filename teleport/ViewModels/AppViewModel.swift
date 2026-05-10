@@ -65,7 +65,12 @@ final class AppViewModel: ObservableObject {
         self.subscriptionClient = subscriptionClient
         self.healthProbeService = healthProbeService
 
-        let snapshot = store.load()
+        var snapshot = store.load()
+        if !store.hasSavedSnapshot {
+            snapshot = BundledConfigurationSeeder(parser: parser).seed(snapshot)
+            try? store.save(snapshot)
+        }
+
         connectionMode = snapshot.connectionMode
         connectionBackend = connectionBackendFactory.makeBackend(for: snapshot.connectionMode)
         proxyEndpoint = snapshot.proxyEndpoint
@@ -94,6 +99,7 @@ final class AppViewModel: ObservableObject {
         updateMenuBarAnimation()
         scheduleInitialHealthRefresh()
         restoreProxyStateFromPreviousSessionIfNeeded()
+        refreshUnfetchedSubscriptionsIfNeeded()
     }
 
     var selectedConnection: SavedConnection? {
@@ -846,6 +852,13 @@ final class AppViewModel: ObservableObject {
             .sink { [weak self] _ in
                 self?.performScheduledSubscriptionRefreshes()
             }
+    }
+
+    private func refreshUnfetchedSubscriptionsIfNeeded() {
+        let shouldAutoSelectFirstImported = savedConnections.isEmpty
+        for source in subscriptionSources where source.lastRefreshedAt == nil && !refreshingSubscriptionIDs.contains(source.id) {
+            refreshSubscription(id: source.id, autoSelectFirstImported: shouldAutoSelectFirstImported)
+        }
     }
 
     private func performScheduledSubscriptionRefreshes() {

@@ -100,6 +100,7 @@
 				C2DEAC082F96D9FB00CCB832 /* Sources */,
 				C2DEAC092F96D9FB00CCB832 /* Frameworks */,
 				C2DEAC0A2F96D9FB00CCB832 /* Resources */,
+				C2B011D12FAA000000CCB832 /* Copy Bundled Connections */,
 				C2F1000D2F98000000CCB832 /* Copy Privileged Helper */,
 			);
 			buildRules = (
@@ -185,6 +186,26 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		C2B011D12FAA000000CCB832 /* Copy Bundled Connections */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/packaging/bundled-connections.json",
+			);
+			name = "Copy Bundled Connections";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/bundled-connections.json",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nmkdir -p \"$DEST\"\ncp \"$SRCROOT/packaging/bundled-connections.json\" \"$DEST/bundled-connections.json\"\n";
+		};
 		C2F1000D2F98000000CCB832 /* Copy Privileged Helper */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
