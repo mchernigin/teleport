@@ -55,8 +55,7 @@ package: build-release
     test -x "$APP/Contents/Library/PrivilegedHelperTools/{{helper_name}}"
 
     VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
-    BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")
-    PACKAGE_NAME="{{app_name}}-$VERSION-build-$BUILD"
+    PACKAGE_NAME="{{app_name}}-$VERSION"
     PACKAGE_APP="$DIST/$PACKAGE_NAME.app"
     DMG_ROOT="$DIST/dmg-root"
     PACKAGE_DMG="$DIST/$PACKAGE_NAME.dmg"
