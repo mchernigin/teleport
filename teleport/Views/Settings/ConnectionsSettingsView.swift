@@ -169,6 +169,8 @@ struct ConnectionsSettingsView: View {
     @ViewBuilder
     private func subscriptionHeaderRow(_ source: SubscriptionSource) -> some View {
         let isExpanded = expandedSubscriptionIDs.contains(source.id)
+        let isRefreshingHealth = viewModel.isRefreshingSubscriptionHealth(source.id)
+        let isQueuedHealth = viewModel.isQueuedSubscriptionHealth(source.id)
 
         HStack(alignment: .top, spacing: 10) {
             Button {
@@ -226,9 +228,10 @@ struct ConnectionsSettingsView: View {
             Button {
                 viewModel.refreshSubscriptionHealth(id: source.id)
             } label: {
-                Image(systemName: "waveform.path.ecg")
+                Image(systemName: subscriptionHealthActionIcon(isRefreshing: isRefreshingHealth, isQueued: isQueuedHealth))
             }
             .buttonStyle(.borderless)
+            .disabled(isRefreshingHealth || isQueuedHealth)
 
             Button(role: .destructive) {
                 expandedSubscriptionIDs.remove(source.id)
@@ -367,6 +370,18 @@ struct ConnectionsSettingsView: View {
         case .unknown, .reachable, .unreachable:
             return "waveform.path.ecg"
         }
+    }
+
+    private func subscriptionHealthActionIcon(isRefreshing: Bool, isQueued: Bool) -> String {
+        if isRefreshing {
+            return "hourglass"
+        }
+
+        if isQueued {
+            return "clock.badge"
+        }
+
+        return "waveform.path.ecg"
     }
 
     @ViewBuilder

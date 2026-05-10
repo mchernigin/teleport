@@ -244,8 +244,18 @@ final class AppViewModel: ObservableObject {
         refreshingHealthConnectionIDs.contains(connectionID)
     }
 
+    func isRefreshingSubscriptionHealth(_ sourceID: UUID) -> Bool {
+        let ids = Set((importedConnectionsBySourceID[sourceID] ?? []).map(\.id))
+        return !refreshingHealthConnectionIDs.isDisjoint(with: ids)
+    }
+
     func isQueuedHealth(for connectionID: UUID) -> Bool {
         queuedHealthConnectionIDs.contains(connectionID)
+    }
+
+    func isQueuedSubscriptionHealth(_ sourceID: UUID) -> Bool {
+        let ids = Set((importedConnectionsBySourceID[sourceID] ?? []).map(\.id))
+        return !queuedHealthConnectionIDs.isDisjoint(with: ids)
     }
 
     func healthCheck(for connection: SavedConnection) -> ConnectionHealthCheck {
