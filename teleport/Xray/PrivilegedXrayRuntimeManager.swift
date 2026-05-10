@@ -65,7 +65,8 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
         let protectedHost = sessionState?.protectedHost ?? readProtectedHost()
         let outboundInterface = sessionState?.outboundInterface
         do {
-            try helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost, outboundInterface: outboundInterface)
+            try helperClient.stop(paths: paths, protectedHost: protectedHost, outboundInterface: outboundInterface)
+            removeSessionState()
         } catch PrivilegedHelperClientError.unavailable(_) where pid == nil && protectedHost == nil {
             return
         } catch PrivilegedHelperClientError.unavailable(_) {
@@ -74,7 +75,8 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
                     throw XrayRuntimeManager.RuntimeError.binaryNotFound
                 }
                 try helperInstaller.ensureInstalled(runtimeURL: runtimeURL)
-                try helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost, outboundInterface: outboundInterface)
+                try helperClient.stop(paths: paths, protectedHost: protectedHost, outboundInterface: outboundInterface)
+                removeSessionState()
             } catch {
                 throw XrayTunRuntimeError.stopFailed(summary: readableSummary(from: error), details: diagnosticDetails(from: error))
             }
@@ -91,10 +93,11 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
             return
         }
         let sessionState = readSessionState()
-        let pid = sessionState.map(\.pid) ?? readPID()
         let protectedHost = sessionState?.protectedHost ?? readProtectedHost() ?? fallbackProtectedHost
         let outboundInterface = sessionState?.outboundInterface
-        try? helperClient.stop(paths: paths, pid: pid, protectedHost: protectedHost, outboundInterface: outboundInterface)
+        if (try? helperClient.stop(paths: paths, protectedHost: protectedHost, outboundInterface: outboundInterface)) != nil {
+            removeSessionState()
+        }
     }
 
     func teardown() {
@@ -123,6 +126,10 @@ final class PrivilegedXrayRuntimeManager: @unchecked Sendable {
     private func readSessionState() -> XrayTunSessionState? {
         guard let data = try? Data(contentsOf: paths.sessionStateFileURL) else { return nil }
         return try? JSONDecoder().decode(XrayTunSessionState.self, from: data)
+    }
+
+    private func removeSessionState() {
+        try? fileManager.removeItem(at: paths.sessionStateFileURL)
     }
 
     private func readPID() -> pid_t? {

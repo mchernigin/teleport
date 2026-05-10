@@ -26,7 +26,7 @@ struct PrivilegedHelperClient: Sendable {
         try response.validate()
     }
 
-    func stop(paths: XrayTunRuntimePaths, pid: pid_t?, protectedHost: String?, outboundInterface: String?) throws {
+    func stop(paths: XrayTunRuntimePaths, protectedHost: String?, outboundInterface: String?) throws {
         let response = try send(PrivilegedHelperRequest(
             command: "stop",
             stateDirectoryPath: paths.stateDirectoryURL.path,
@@ -34,7 +34,7 @@ struct PrivilegedHelperClient: Sendable {
             protectedHost: protectedHost,
             tunnelInterfaceName: nil,
             outboundInterface: outboundInterface,
-            pid: pid
+            pid: nil
         ))
         try response.validate()
     }

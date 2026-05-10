@@ -313,15 +313,19 @@ private enum NerdLogFile: String, CaseIterable, Identifiable, Hashable {
         case .systemProxy:
             return Self.applicationSupportDirectoryURL.appendingPathComponent("xray.log")
         case .vpn:
-            return Self.applicationSupportDirectoryURL.appendingPathComponent("xray-tun.log")
+            return Self.helperStateDirectoryURL.appendingPathComponent("xray-tun.log")
         case .vpnControl:
-            return Self.applicationSupportDirectoryURL.appendingPathComponent("xray-tun-control.log")
+            return Self.helperStateDirectoryURL.appendingPathComponent("xray-tun-control.log")
         }
     }
 
     static var applicationSupportDirectoryURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("teleport", isDirectory: true)
+    }
+
+    static var helperStateDirectoryURL: URL {
+        URL(fileURLWithPath: PrivilegedHelperConstants.helperStateDirectoryPath, isDirectory: true)
     }
 }
 

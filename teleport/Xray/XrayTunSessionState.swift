@@ -26,11 +26,12 @@ struct XrayTunRuntimePaths: Sendable {
 
     init(fileManager: FileManager = .default) {
         let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let helperStateDirectoryURL = URL(fileURLWithPath: PrivilegedHelperConstants.helperStateDirectoryPath, isDirectory: true)
         stateDirectoryURL = baseURL.appendingPathComponent("teleport", isDirectory: true)
-        pidFileURL = stateDirectoryURL.appendingPathComponent("xray-tun.pid")
-        logFileURL = stateDirectoryURL.appendingPathComponent("xray-tun.log")
-        protectedHostFileURL = stateDirectoryURL.appendingPathComponent("xray-tun-protected-host")
-        controlLogFileURL = stateDirectoryURL.appendingPathComponent("xray-tun-control.log")
+        pidFileURL = helperStateDirectoryURL.appendingPathComponent("xray-tun.pid")
+        logFileURL = helperStateDirectoryURL.appendingPathComponent("xray-tun.log")
+        protectedHostFileURL = helperStateDirectoryURL.appendingPathComponent("xray-tun-protected-host")
+        controlLogFileURL = helperStateDirectoryURL.appendingPathComponent("xray-tun-control.log")
         sessionStateFileURL = stateDirectoryURL.appendingPathComponent("xray-tun-session.json")
     }
 }

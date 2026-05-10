@@ -5,7 +5,10 @@ import Security
 private let helperVersion = PrivilegedHelperConstants.version
 private let helperLabel = PrivilegedHelperConstants.label
 private let socketPath = PrivilegedHelperConstants.socketPath
+private let helperStateDirectoryPath = PrivilegedHelperConstants.helperStateDirectoryPath
 private let installedXrayPath = PrivilegedHelperConstants.installedXrayPath
+private let maxRequestBytes = 64 * 1024
+private let maxCapturedShellOutputBytes = 64 * 1024
 
 struct HelperRequest: Codable {
     var command: String
@@ -171,6 +174,9 @@ final class HelperServer {
             let count = Darwin.read(fd, &buffer, buffer.count)
             if count > 0 {
                 data.append(buffer, count: count)
+                if data.count > maxRequestBytes {
+                    throw HelperError("Privileged helper request is too large")
+                }
             } else if count == 0 {
                 break
             } else if errno == EINTR {
@@ -203,18 +209,21 @@ final class HelperServer {
 
 final class XrayTunController {
     func start(request: HelperRequest) throws {
-        let stateDirectoryPath = try required(request.stateDirectoryPath, "stateDirectoryPath")
-        let configPath = try required(request.configPath, "configPath")
-        let protectedHost = try required(request.protectedHost, "protectedHost")
-        let tunnelInterfaceName = try required(request.tunnelInterfaceName, "tunnelInterfaceName")
-        let outboundInterface = request.outboundInterface ?? ""
+        let stateDirectoryPath = try validatedStateDirectoryPath(request.stateDirectoryPath)
+        let configPath = try validatedTunnelConfigPath(request.configPath, stateDirectoryPath: stateDirectoryPath)
+        let protectedHost = try validatedProtectedHost(request.protectedHost, required: true)
+        let tunnelInterfaceName = try validatedTunnelInterfaceName(request.tunnelInterfaceName)
+        let outboundInterface = try validatedOutboundInterface(request.outboundInterface)
 
         guard FileManager.default.isExecutableFile(atPath: installedXrayPath) else {
             throw HelperError("Installed Xray runtime is missing. Reinstall Teleport's privileged helper.")
         }
 
+        let helperStateDirectoryPath = try preparedHelperStateDirectoryPath()
+        try terminateManagedXray(helperStateDirectoryPath: helperStateDirectoryPath)
+        try terminateLegacyManagedXray(stateDirectoryPath: stateDirectoryPath)
         try runShell(makeStartScript(
-            stateDirectoryPath: stateDirectoryPath,
+            helperStateDirectoryPath: helperStateDirectoryPath,
             configPath: configPath,
             protectedHost: protectedHost,
             tunnelInterfaceName: tunnelInterfaceName,
@@ -223,12 +232,16 @@ final class XrayTunController {
     }
 
     func stop(request: HelperRequest) throws {
-        let stateDirectoryPath = try required(request.stateDirectoryPath, "stateDirectoryPath")
+        let stateDirectoryPath = try validatedStateDirectoryPath(request.stateDirectoryPath)
+        let protectedHost = try validatedProtectedHost(request.protectedHost, required: false)
+        let outboundInterface = try validatedOutboundInterface(request.outboundInterface)
+        let helperStateDirectoryPath = try preparedHelperStateDirectoryPath()
+        try terminateManagedXray(helperStateDirectoryPath: helperStateDirectoryPath)
+        try terminateLegacyManagedXray(stateDirectoryPath: stateDirectoryPath)
         try runShell(makeStopScript(
-            stateDirectoryPath: stateDirectoryPath,
-            pid: request.pid,
-            protectedHost: request.protectedHost,
-            outboundInterface: request.outboundInterface
+            helperStateDirectoryPath: helperStateDirectoryPath,
+            protectedHost: protectedHost.isEmpty ? nil : protectedHost,
+            outboundInterface: outboundInterface
         ))
     }
 
@@ -237,37 +250,296 @@ final class XrayTunController {
         return value
     }
 
+    private func validatedStateDirectoryPath(_ value: String?) throws -> String {
+        let rawPath = try required(value, "stateDirectoryPath")
+        let expectedPath = try expectedStateDirectoryPath()
+        let normalizedPath = try standardizedAbsolutePath(rawPath, name: "stateDirectoryPath")
+        guard normalizedPath == expectedPath else {
+            throw HelperError("Rejected unexpected state directory path")
+        }
+
+        let resolvedPath = URL(fileURLWithPath: normalizedPath, isDirectory: true).resolvingSymlinksInPath().path
+        guard resolvedPath == expectedPath else {
+            throw HelperError("Rejected state directory path that resolves outside Teleport's support directory")
+        }
+
+        let consoleOwner = consoleUserIDs()
+        var statInfo = stat()
+        if lstat(normalizedPath, &statInfo) == 0 {
+            guard (statInfo.st_mode & S_IFMT) == S_IFDIR else {
+                throw HelperError("Rejected state directory path that is not a directory")
+            }
+            guard statInfo.st_uid == consoleOwner.uid else {
+                throw HelperError("Rejected state directory not owned by console user")
+            }
+            guard (statInfo.st_mode & S_IWOTH) == 0 else {
+                throw HelperError("Rejected world-writable state directory")
+            }
+        } else if errno == ENOENT {
+            return normalizedPath
+        } else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        return normalizedPath
+    }
+
+    private func validatedTunnelConfigPath(_ value: String?, stateDirectoryPath: String) throws -> String {
+        let rawPath = try required(value, "configPath")
+        let normalizedPath = try standardizedAbsolutePath(rawPath, name: "configPath")
+        let expectedPath = URL(fileURLWithPath: stateDirectoryPath, isDirectory: true)
+            .appendingPathComponent("xray-tun-config.json", isDirectory: false)
+            .standardizedFileURL
+            .path
+        guard normalizedPath == expectedPath else {
+            throw HelperError("Rejected unexpected Xray tunnel config path")
+        }
+        guard URL(fileURLWithPath: normalizedPath).resolvingSymlinksInPath().path == expectedPath else {
+            throw HelperError("Rejected Xray tunnel config path that resolves outside Teleport's support directory")
+        }
+
+        var statInfo = stat()
+        guard lstat(normalizedPath, &statInfo) == 0 else {
+            throw HelperError("Xray tunnel config is missing")
+        }
+        guard (statInfo.st_mode & S_IFMT) == S_IFREG else {
+            throw HelperError("Rejected Xray tunnel config that is not a regular file")
+        }
+        let consoleOwner = consoleUserIDs()
+        guard statInfo.st_uid == consoleOwner.uid else {
+            throw HelperError("Rejected Xray tunnel config not owned by console user")
+        }
+        guard (statInfo.st_mode & S_IWOTH) == 0 else {
+            throw HelperError("Rejected world-writable Xray tunnel config")
+        }
+        return normalizedPath
+    }
+
+    private func expectedStateDirectoryPath() throws -> String {
+        let uid = consoleUserIDs().uid
+        guard let passwd = getpwuid(uid), let homeDirectory = passwd.pointee.pw_dir else {
+            throw HelperError("Could not resolve console user home directory")
+        }
+        return URL(fileURLWithPath: String(cString: homeDirectory), isDirectory: true)
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("teleport", isDirectory: true)
+            .standardizedFileURL
+            .path
+    }
+
+    private func standardizedAbsolutePath(_ value: String, name: String) throws -> String {
+        guard value.hasPrefix("/") else {
+            throw HelperError("Rejected non-absolute \(name)")
+        }
+        let path = URL(fileURLWithPath: value).standardizedFileURL.path
+        guard !path.contains("/../") else {
+            throw HelperError("Rejected invalid \(name)")
+        }
+        return path
+    }
+
+    private func validatedProtectedHost(_ value: String?, required: Bool) throws -> String {
+        guard let value, !value.isEmpty else {
+            if required { throw HelperError("Missing protectedHost") }
+            return ""
+        }
+        guard value.count <= 253,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.hasPrefix("-"),
+              !value.hasPrefix("."),
+              !value.hasSuffix("."),
+              !value.contains("..") else {
+            throw HelperError("Rejected invalid protectedHost")
+        }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-")
+        guard value.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            throw HelperError("Rejected invalid protectedHost")
+        }
+        for label in value.split(separator: ".") {
+            guard !label.isEmpty,
+                  label.count <= 63,
+                  label.first != "-",
+                  label.last != "-" else {
+                throw HelperError("Rejected invalid protectedHost")
+            }
+        }
+        return value
+    }
+
+    private func validatedTunnelInterfaceName(_ value: String?) throws -> String {
+        let value = try required(value, "tunnelInterfaceName")
+        guard matches(value, pattern: #"^utun[0-9]{1,4}$"#) else {
+            throw HelperError("Rejected invalid tunnelInterfaceName")
+        }
+        return value
+    }
+
+    private func validatedOutboundInterface(_ value: String?) throws -> String {
+        guard let value, !value.isEmpty else { return "" }
+        guard value.count <= 32,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.hasPrefix("-"),
+              matches(value, pattern: #"^[A-Za-z0-9._-]+$"#) else {
+            throw HelperError("Rejected invalid outboundInterface")
+        }
+        return value
+    }
+
+    private func matches(_ value: String, pattern: String) -> Bool {
+        value.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private func preparedHelperStateDirectoryPath() throws -> String {
+        let normalizedPath = try standardizedAbsolutePath(helperStateDirectoryPath, name: "helperStateDirectoryPath")
+        var statInfo = stat()
+        if lstat(normalizedPath, &statInfo) == 0 {
+            guard (statInfo.st_mode & S_IFMT) == S_IFDIR else {
+                throw HelperError("Rejected helper state path that is not a directory")
+            }
+            guard statInfo.st_uid == 0 else {
+                throw HelperError("Rejected helper state directory not owned by root")
+            }
+            guard (statInfo.st_mode & (S_IWGRP | S_IWOTH)) == 0 else {
+                throw HelperError("Rejected group/world-writable helper state directory")
+            }
+        } else if errno == ENOENT {
+            try FileManager.default.createDirectory(atPath: normalizedPath, withIntermediateDirectories: false)
+            guard chown(normalizedPath, 0, 0) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            guard chmod(normalizedPath, 0o755) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+        } else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        return normalizedPath
+    }
+
+    private func terminateManagedXray(helperStateDirectoryPath: String) throws {
+        let pidFilePath = helperStateDirectoryPath + "/xray-tun.pid"
+        guard let pid = managedXrayPID(pidFilePath: pidFilePath, expectedOwner: 0),
+              isInstalledXrayProcess(pid: pid) else {
+            return
+        }
+        try terminateInstalledXray(pid: pid)
+    }
+
+    private func terminateLegacyManagedXray(stateDirectoryPath: String) throws {
+        let pidFilePath = stateDirectoryPath + "/xray-tun.pid"
+        guard let pid = managedXrayPID(pidFilePath: pidFilePath, expectedOwner: consoleUserIDs().uid),
+              isInstalledXrayProcess(pid: pid) else {
+            return
+        }
+        try terminateInstalledXray(pid: pid)
+    }
+
+    private func terminateInstalledXray(pid: pid_t) throws {
+        try signalInstalledXray(pid: pid, signal: SIGTERM)
+        for _ in 0 ..< 10 {
+            usleep(200_000)
+            if !isInstalledXrayProcess(pid: pid) {
+                return
+            }
+        }
+        try signalInstalledXray(pid: pid, signal: SIGKILL)
+    }
+
+    private func managedXrayPID(pidFilePath: String, expectedOwner: uid_t) -> pid_t? {
+        var statInfo = stat()
+        guard lstat(pidFilePath, &statInfo) == 0,
+              (statInfo.st_mode & S_IFMT) == S_IFREG,
+              statInfo.st_uid == expectedOwner,
+              statInfo.st_size > 0,
+              statInfo.st_size <= 32,
+              let rawPID = try? String(contentsOfFile: pidFilePath, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              let pid = pid_t(rawPID),
+              pid > 0 else {
+            return nil
+        }
+        return pid
+    }
+
+    private func signalInstalledXray(pid: pid_t, signal: Int32) throws {
+        guard isInstalledXrayProcess(pid: pid) else {
+            return
+        }
+        guard Darwin.kill(pid, signal) == 0 || errno == ESRCH else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    private func isInstalledXrayProcess(pid: pid_t) -> Bool {
+        var pathBuffer = [CChar](repeating: 0, count: 4096)
+        let pathLength = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
+        guard pathLength > 0 else { return false }
+        let processPath = URL(fileURLWithPath: String(cString: pathBuffer)).resolvingSymlinksInPath().path
+        let expectedPath = URL(fileURLWithPath: installedXrayPath).resolvingSymlinksInPath().path
+        return processPath == expectedPath
+    }
+
     private func runShell(_ script: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", script]
+
         let outputPipe = Pipe()
         let errorPipe = Pipe()
+        let stdout = BoundedOutputCollector(maxBytes: maxCapturedShellOutputBytes)
+        let stderr = BoundedOutputCollector(maxBytes: maxCapturedShellOutputBytes)
+        drain(outputPipe, into: stdout)
+        drain(errorPipe, into: stderr)
         process.standardOutput = outputPipe
         process.standardError = errorPipe
-        try process.run()
-        process.waitUntilExit()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            stopDraining(outputPipe, into: stdout)
+            stopDraining(errorPipe, into: stderr)
+            throw error
+        }
+
+        stopDraining(outputPipe, into: stdout)
+        stopDraining(errorPipe, into: stderr)
 
         guard process.terminationStatus == 0 else {
-            let stderr = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let stdout = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw HelperError([stderr, stdout].filter { !$0.isEmpty }.joined(separator: "\n"))
+            throw HelperError([stderr.text(), stdout.text()].filter { !$0.isEmpty }.joined(separator: "\n"))
         }
     }
 
-    private func makeStartScript(stateDirectoryPath: String, configPath: String, protectedHost: String, tunnelInterfaceName: String, outboundInterface: String) -> String {
+    private func drain(_ pipe: Pipe, into collector: BoundedOutputCollector) {
+        pipe.fileHandleForReading.readabilityHandler = { fileHandle in
+            let data = fileHandle.availableData
+            if data.isEmpty {
+                fileHandle.readabilityHandler = nil
+            } else {
+                collector.append(data)
+            }
+        }
+    }
+
+    private func stopDraining(_ pipe: Pipe, into collector: BoundedOutputCollector) {
+        let fileHandle = pipe.fileHandleForReading
+        fileHandle.readabilityHandler = nil
+        try? pipe.fileHandleForWriting.close()
+        collector.append(fileHandle.readDataToEndOfFile())
+    }
+
+    private func makeStartScript(helperStateDirectoryPath: String, configPath: String, protectedHost: String, tunnelInterfaceName: String, outboundInterface: String) -> String {
         let q = shellQuote
-        let pidFile = stateDirectoryPath + "/xray-tun.pid"
-        let logFile = stateDirectoryPath + "/xray-tun.log"
-        let protectedHostFile = stateDirectoryPath + "/xray-tun-protected-host"
-        let protectedDNSFile = stateDirectoryPath + "/xray-tun-protected-dns"
-        let controlLogFile = stateDirectoryPath + "/xray-tun-control.log"
+        let pidFile = helperStateDirectoryPath + "/xray-tun.pid"
+        let logFile = helperStateDirectoryPath + "/xray-tun.log"
+        let protectedHostFile = helperStateDirectoryPath + "/xray-tun-protected-host"
+        let protectedDNSFile = helperStateDirectoryPath + "/xray-tun-protected-dns"
+        let controlLogFile = helperStateDirectoryPath + "/xray-tun-control.log"
 
         return """
         set -eu
-        STATE_DIR=\(q(stateDirectoryPath))
+        HELPER_STATE_DIR=\(q(helperStateDirectoryPath))
         PID_FILE=\(q(pidFile))
         LOG_FILE=\(q(logFile))
         PROTECTED_HOST_FILE=\(q(protectedHostFile))
@@ -282,17 +554,13 @@ final class XrayTunController {
         \(deleteHostRouteFunction())
         \(dnsRouteFunctions())
 
-        mkdir -p "$STATE_DIR"
-        printf '%s helper start requested for %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$PROTECTED_HOST" >> "$CONTROL_LOG_FILE"
+        for helper_file in "$PID_FILE" "$LOG_FILE" "$PROTECTED_HOST_FILE" "$PROTECTED_DNS_FILE" "$CONTROL_LOG_FILE"; do
+            [ ! -L "$helper_file" ] || rm -f "$helper_file"
+        done
 
-        if [ -f "$PID_FILE" ]; then
-            old_pid=$(cat "$PID_FILE" 2>/dev/null || true)
-            if [ -n "$old_pid" ]; then
-                kill "$old_pid" 2>/dev/null || true
-                sleep 0.5
-                kill -9 "$old_pid" 2>/dev/null || true
-            fi
-        fi
+        touch "$CONTROL_LOG_FILE"
+        chmod 644 "$CONTROL_LOG_FILE"
+        printf '%s helper start requested for %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$PROTECTED_HOST" >> "$CONTROL_LOG_FILE"
 
         if [ -f "$PROTECTED_HOST_FILE" ]; then
             old_protected_host=$(cat "$PROTECTED_HOST_FILE" 2>/dev/null || true)
@@ -307,20 +575,23 @@ final class XrayTunController {
 
         rm -f "$PID_FILE"
         : > "$LOG_FILE"
+        chmod 644 "$LOG_FILE"
         printf '%s\n' "$PROTECTED_HOST" > "$PROTECTED_HOST_FILE"
+        chmod 644 "$PROTECTED_HOST_FILE"
 
         delete_host_route "$PROTECTED_HOST"
         gateway=$(route -n get "$PROTECTED_HOST" 2>/dev/null | awk '/gateway:/{print $2; exit}')
         \(protectHostRouteCommands())
         protect_dns_routes
 
-        cd "$STATE_DIR"
+        cd "$HELPER_STATE_DIR"
         (
             trap '' HUP
             exec "$XRAY" run -c "$CONFIG"
         ) </dev/null >> "$LOG_FILE" 2>&1 &
         pid=$!
         printf '%s\n' "$pid" > "$PID_FILE"
+        chmod 644 "$PID_FILE"
         printf '%s helper launched pid %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$pid" >> "$CONTROL_LOG_FILE"
 
         tun_interface=""
@@ -421,13 +692,12 @@ final class XrayTunController {
         """
     }
 
-    private func makeStopScript(stateDirectoryPath: String, pid: Int32?, protectedHost: String?, outboundInterface: String?) -> String {
+    private func makeStopScript(helperStateDirectoryPath: String, protectedHost: String?, outboundInterface: String?) -> String {
         let q = shellQuote
-        let pidFile = stateDirectoryPath + "/xray-tun.pid"
-        let protectedHostFile = stateDirectoryPath + "/xray-tun-protected-host"
-        let protectedDNSFile = stateDirectoryPath + "/xray-tun-protected-dns"
-        let controlLogFile = stateDirectoryPath + "/xray-tun-control.log"
-        let sessionStateFile = stateDirectoryPath + "/xray-tun-session.json"
+        let pidFile = helperStateDirectoryPath + "/xray-tun.pid"
+        let protectedHostFile = helperStateDirectoryPath + "/xray-tun-protected-host"
+        let protectedDNSFile = helperStateDirectoryPath + "/xray-tun-protected-dns"
+        let controlLogFile = helperStateDirectoryPath + "/xray-tun-control.log"
 
         var commands: [String] = []
         commands.append("OUTBOUND_INTERFACE=\(q(outboundInterface ?? ""))")
@@ -435,13 +705,9 @@ final class XrayTunController {
         commands.append("CONTROL_LOG_FILE=\(q(controlLogFile))")
         commands.append(deleteHostRouteFunction())
         commands.append(dnsRouteFunctions())
-        commands.append("mkdir -p \(q(stateDirectoryPath))")
+        commands.append("for helper_file in \(q(pidFile)) \(q(protectedHostFile)) \(q(protectedDNSFile)) \(q(controlLogFile)); do [ ! -L \"$helper_file\" ] || rm -f \"$helper_file\"; done")
+        commands.append("touch \(q(controlLogFile)); chmod 644 \(q(controlLogFile))")
         commands.append("printf '%s helper stop requested\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\" >> \(q(controlLogFile))")
-        if let pid {
-            commands.append(killCommands(pid: pid))
-        } else {
-            commands.append("if [ -f \(q(pidFile)) ]; then pid=$(cat \(q(pidFile)) 2>/dev/null || true); if [ -n \"$pid\" ]; then kill \"$pid\" 2>/dev/null || true; for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 \"$pid\" 2>/dev/null || break; sleep 0.2; done; kill -0 \"$pid\" 2>/dev/null && kill -9 \"$pid\" 2>/dev/null || true; fi; fi")
-        }
         if let protectedHost, !protectedHost.isEmpty {
             commands.append("delete_host_route \(q(protectedHost))")
         } else {
@@ -453,12 +719,7 @@ final class XrayTunController {
         commands.append("rm -f \(q(pidFile))")
         commands.append("rm -f \(q(protectedHostFile))")
         commands.append("rm -f \(q(protectedDNSFile))")
-        commands.append("rm -f \(q(sessionStateFile))")
         return commands.joined(separator: "; ")
-    }
-
-    private func killCommands(pid: Int32) -> String {
-        "kill \(pid) 2>/dev/null || true; for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 \(pid) 2>/dev/null || break; sleep 0.2; done; kill -0 \(pid) 2>/dev/null && kill -9 \(pid) 2>/dev/null || true"
     }
 
     private func deleteHostRouteFunction() -> String {
@@ -515,6 +776,7 @@ final class XrayTunController {
 
         protect_dns_routes() {
             : > "$PROTECTED_DNS_FILE"
+            chmod 644 "$PROTECTED_DNS_FILE"
             scutil --dns 2>/dev/null | awk '/nameserver\\[[0-9]+\\]/{print $3}' | sort -u | while IFS= read -r dns_server; do
                 is_public_ipv4 "$dns_server" || continue
                 delete_host_route "$dns_server"
@@ -555,6 +817,43 @@ private func consoleUserIDs() -> (uid: uid_t, gid: gid_t) {
 
 private func shellQuote(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+private final class BoundedOutputCollector {
+    private let maxBytes: Int
+    private let lock = NSLock()
+    private var data = Data()
+    private var truncated = false
+
+    init(maxBytes: Int) {
+        self.maxBytes = max(1, maxBytes)
+    }
+
+    func append(_ chunk: Data) {
+        guard !chunk.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+
+        data.append(chunk)
+        if data.count > maxBytes {
+            data = Data(data.suffix(maxBytes))
+            truncated = true
+        }
+    }
+
+    func text() -> String {
+        lock.lock()
+        let capturedData = data
+        let wasTruncated = truncated
+        lock.unlock()
+
+        var output = String(decoding: capturedData, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if wasTruncated {
+            output = "[output truncated to last \(maxBytes) bytes]\n" + output
+        }
+        return output
+    }
 }
 
 signal(SIGPIPE, SIG_IGN)
