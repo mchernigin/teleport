@@ -7,6 +7,7 @@ helper_name := "dev.x.teleport.PrivilegedHelper"
 derived_data := "build/DerivedData"
 dist_dir := "build/dist"
 destination := "platform=macOS,arch=arm64"
+verify_sources := "teleport/TeleportModels.swift teleport/Connection/*.swift teleport/Parsing/*.swift teleport/Persistence/*.swift teleport/Subscriptions/*.swift teleport/Xray/*.swift teleport/Proxy/*.swift teleport/Health/*.swift teleport/ViewModels/*.swift Shared/PrivilegedHelperConstants.swift"
 
 # List available recipes
 default:
@@ -140,3 +141,21 @@ package: build-release
 # Build Release package and open build/dist in Finder
 package-open: package
     open {{dist_dir}}
+
+# Run all verification scripts
+verify: verify-core verify-subscription-support verify-connection-health
+
+# Run core parser/config verification
+verify-core:
+    swiftc {{verify_sources}} scripts/verify_core.swift -o /tmp/teleport-verify-core
+    /tmp/teleport-verify-core
+
+# Run subscription import verification
+verify-subscription-support:
+    swiftc {{verify_sources}} scripts/verify_subscription_support.swift -o /tmp/teleport-verify-subscription-support
+    /tmp/teleport-verify-subscription-support
+
+# Run connection health metadata verification
+verify-connection-health:
+    swiftc {{verify_sources}} scripts/verify_connection_health.swift -o /tmp/teleport-verify-connection-health
+    /tmp/teleport-verify-connection-health

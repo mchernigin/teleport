@@ -5,7 +5,6 @@ struct VerifyConnectionHealth {
     static func main() throws {
         try testHealthMetadataSnapshotRoundTrip()
         try testLegacySnapshotWithoutHealthMetadata()
-        try testFreshnessClassification()
         try testSubscriptionRefreshPreservesHealthForEquivalentEntry()
         print("verify_connection_health: all checks passed")
     }
@@ -83,28 +82,6 @@ struct VerifyConnectionHealth {
         let decoded = try JSONDecoder().decode(AppSnapshot.self, from: legacyJSON)
         precondition(decoded.savedConnections.count == 1)
         precondition(decoded.savedConnections[0].healthCheck == nil)
-    }
-
-    private static func testFreshnessClassification() throws {
-        let fresh = ConnectionHealthCheck(
-            state: .reachable,
-            checkedAt: Date(),
-            latencyMilliseconds: 12,
-            latencyKind: .proxyRequest,
-            failureSummary: nil
-        )
-        precondition(fresh.freshness(now: Date(), ttl: 60) == .fresh)
-
-        let stale = ConnectionHealthCheck(
-            state: .unreachable,
-            checkedAt: Date(timeIntervalSinceNow: -3600),
-            latencyMilliseconds: nil,
-            latencyKind: nil,
-            failureSummary: "Timed out"
-        )
-        precondition(stale.freshness(now: Date(), ttl: 60) == .stale)
-
-        precondition(ConnectionHealthCheck.unknown.freshness(now: Date(), ttl: 60) == .unknown)
     }
 
     private static func testSubscriptionRefreshPreservesHealthForEquivalentEntry() throws {

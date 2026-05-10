@@ -54,26 +54,32 @@ Runtime diagnostics for VPN mode are written under:
 
 ## Build
 
-Open `teleport.xcodeproj` in Xcode and run the `teleport` scheme.
-
-Or build from the command line:
+Use the included `justfile` for command-line builds and packaging:
 
 ```bash
-xcodebuild -project teleport.xcodeproj -scheme teleport -configuration Debug build
+just build-debug
+just build-release
+just package
 ```
 
-## Subscription verification script
-
-A focused verification script for subscription parsing, persistence, and selection preservation is available at:
+Useful recipes:
 
 ```bash
-swiftc teleport/TeleportModels.swift teleport/Connection/*.swift teleport/Parsing/*.swift teleport/Persistence/*.swift teleport/Subscriptions/*.swift teleport/Xray/*.swift teleport/Proxy/*.swift teleport/Health/*.swift teleport/ViewModels/*.swift scripts/verify_subscription_support.swift -o /tmp/verify_subscription_support && /tmp/verify_subscription_support
+just --list
+just app-path Debug
+just version
+just clean
 ```
 
-## Connection health verification script
+You can also open `teleport.xcodeproj` in Xcode and run the `teleport` scheme.
 
-A focused verification script for health metadata persistence, freshness classification, and subscription reconciliation is available at:
+## Verification scripts
+
+Use the `justfile` to run focused verification scripts:
 
 ```bash
-swiftc teleport/TeleportModels.swift teleport/Connection/*.swift teleport/Parsing/*.swift teleport/Persistence/*.swift teleport/Subscriptions/*.swift teleport/Xray/*.swift teleport/Proxy/*.swift teleport/Health/*.swift teleport/ViewModels/*.swift scripts/verify_connection_health.swift -o /tmp/verify_connection_health && /tmp/verify_connection_health
+just verify
+just verify-core
+just verify-subscription-support
+just verify-connection-health
 ```
