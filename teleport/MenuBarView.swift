@@ -71,62 +71,24 @@ struct MenuBarView: View {
     }
 
     private var configurationSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Connection")
-                .font(.subheadline.weight(.semibold))
-
-            if viewModel.savedConnections.isEmpty {
-                Text("No saved connections")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Button("Open Settings") {
-                    NSApplication.shared.activate(ignoringOtherApps: true)
-                    openWindow(id: "settings")
-                }
-            } else {
-                Menu {
-                    if !viewModel.manualConnections.isEmpty {
-                        Section("Saved connections") {
-                            ForEach(viewModel.manualConnections) { connection in
-                                connectionSelectionButton(connection)
-                            }
-                        }
-                    }
-
-                    if !viewModel.subscriptionSources.isEmpty {
-                        Section("Subscriptions") {
-                            ForEach(viewModel.subscriptionSources) { source in
-                                subscriptionMenu(source)
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 2) {
-                        Text(viewModel.selectedConnection?.configuration.displayName ?? "Select connection")
-                                .foregroundStyle(.primary)
-                            Text(connectionSubtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer(minLength: 8)
-
-                        Image(systemName: "chevron.up.chevron.down")
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color(nsColor: .controlBackgroundColor))
-                    )
-                }
-                .menuStyle(.borderlessButton)
-                .disabled(!viewModel.canChangeSelection)
+        ConnectionPickerSection(
+            savedConnectionCount: viewModel.savedConnections.count,
+            manualItems: viewModel.manualConnectionPickerItems,
+            subscriptionSources: viewModel.subscriptionSources,
+            importedItemsBySourceID: viewModel.importedConnectionPickerItemsBySourceID,
+            selectedConnectionID: viewModel.selectedConnectionID,
+            selectedDisplayName: viewModel.selectedConnection?.configuration.displayName ?? "Select connection",
+            subtitle: connectionSubtitle,
+            canChangeSelection: viewModel.canChangeSelection,
+            makeHealthSnapshot: viewModel.healthSnapshotForPicker,
+            healthSummary: viewModel.healthSummary(for:),
+            onSelect: { id in viewModel.selectConnection(id: id) },
+            onOpenSettings: {
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                openWindow(id: "settings")
             }
-        }
+        )
+        .equatable()
     }
 
     private var connectionSubtitle: String {
@@ -140,39 +102,6 @@ struct MenuBarView: View {
         }
 
         return "Manual • \(healthSummary)"
-    }
-
-    @ViewBuilder
-    private func subscriptionMenu(_ source: SubscriptionSource) -> some View {
-        let connections = viewModel.importedConnections(for: source.id)
-
-        Menu {
-            if connections.isEmpty {
-                Button("No imported configs") {}
-                    .disabled(true)
-            } else {
-                ForEach(connections) { connection in
-                    connectionSelectionButton(connection)
-                }
-            }
-        } label: {
-            Text("\(source.displayName) (\(connections.count))")
-        }
-    }
-
-    @ViewBuilder
-    private func connectionSelectionButton(_ connection: SavedConnection) -> some View {
-        Button {
-            viewModel.selectConnection(id: connection.id)
-        } label: {
-            let isSelected = connection.id == viewModel.selectedConnectionID
-            let prefix = isSelected ? "✓ " : ""
-            Text(prefix + connectionLabel(for: connection))
-        }
-    }
-
-    private func connectionLabel(for connection: SavedConnection) -> String {
-        connection.configuration.displayName
     }
 
     private var actionSection: some View {
@@ -202,6 +131,131 @@ struct MenuBarView: View {
                 }
             }
         }
+    }
+}
+
+private struct ConnectionPickerSection: View, Equatable {
+    let savedConnectionCount: Int
+    let manualItems: [ConnectionPickerItem]
+    let subscriptionSources: [SubscriptionSource]
+    let importedItemsBySourceID: [UUID: [ConnectionPickerItem]]
+    let selectedConnectionID: UUID?
+    let selectedDisplayName: String
+    let subtitle: String
+    let canChangeSelection: Bool
+    let makeHealthSnapshot: () -> [UUID: ConnectionHealthCheck]
+    let healthSummary: (ConnectionHealthCheck) -> String
+    let onSelect: (UUID) -> Void
+    let onOpenSettings: () -> Void
+
+    @State private var pickerHealthSnapshot: [UUID: ConnectionHealthCheck] = [:]
+
+    static func == (lhs: ConnectionPickerSection, rhs: ConnectionPickerSection) -> Bool {
+        lhs.savedConnectionCount == rhs.savedConnectionCount
+            && lhs.manualItems == rhs.manualItems
+            && lhs.subscriptionSources == rhs.subscriptionSources
+            && lhs.importedItemsBySourceID == rhs.importedItemsBySourceID
+            && lhs.selectedConnectionID == rhs.selectedConnectionID
+            && lhs.selectedDisplayName == rhs.selectedDisplayName
+            && lhs.canChangeSelection == rhs.canChangeSelection
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Connection")
+                .font(.subheadline.weight(.semibold))
+
+            if savedConnectionCount == 0 {
+                Text("No saved connections")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button("Open Settings", action: onOpenSettings)
+            } else {
+                Menu {
+                    if !manualItems.isEmpty {
+                        Section("Saved connections") {
+                            ForEach(manualItems) { connection in
+                                connectionSelectionButton(connection)
+                            }
+                        }
+                    }
+
+                    if !subscriptionSources.isEmpty {
+                        Section("Subscriptions") {
+                            ForEach(subscriptionSources) { source in
+                                subscriptionMenu(source)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(selectedDisplayName)
+                                .foregroundStyle(.primary)
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Image(systemName: "chevron.up.chevron.down")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                    )
+                }
+                .simultaneousGesture(TapGesture().onEnded {
+                    pickerHealthSnapshot = makeHealthSnapshot()
+                })
+                .menuStyle(.borderlessButton)
+                .disabled(!canChangeSelection)
+            }
+        }
+        .onAppear {
+            pickerHealthSnapshot = makeHealthSnapshot()
+        }
+    }
+
+    @ViewBuilder
+    private func subscriptionMenu(_ source: SubscriptionSource) -> some View {
+        let connections = importedItemsBySourceID[source.id] ?? []
+
+        Menu {
+            if connections.isEmpty {
+                Button("No imported configs") {}
+                    .disabled(true)
+            } else {
+                ForEach(connections) { connection in
+                    connectionSelectionButton(connection)
+                }
+            }
+        } label: {
+            Text("\(source.displayName) (\(connections.count))")
+        }
+    }
+
+    @ViewBuilder
+    private func connectionSelectionButton(_ connection: ConnectionPickerItem) -> some View {
+        Button {
+            onSelect(connection.id)
+        } label: {
+            let isSelected = connection.id == selectedConnectionID
+            let prefix = isSelected ? "✓ " : ""
+            Text(prefix + connectionLabel(for: connection))
+        }
+    }
+
+    private func connectionLabel(for connection: ConnectionPickerItem) -> String {
+        if let healthCheck = pickerHealthSnapshot[connection.id] {
+            return "\(connection.displayName) • \(healthSummary(healthCheck))"
+        }
+        return connection.displayName
     }
 }
 

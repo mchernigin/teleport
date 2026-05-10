@@ -6,8 +6,22 @@ import Foundation
 import Network
 import SystemConfiguration
 
+struct ConnectionPickerItem: Identifiable, Equatable {
+    let id: UUID
+    let sourceID: UUID?
+    let displayName: String
+
+    init(connection: SavedConnection) {
+        id = connection.id
+        sourceID = connection.source?.subscriptionSourceID
+        displayName = connection.configuration.displayName
+    }
+}
+
 final class AppViewModel: ObservableObject {
     @Published private(set) var savedConnections: [SavedConnection]
+    @Published private(set) var connectionPickerItems: [ConnectionPickerItem] = []
+    @Published private(set) var healthChecksByConnectionID: [UUID: ConnectionHealthCheck] = [:]
     @Published private(set) var subscriptionSources: [SubscriptionSource]
     @Published private(set) var selectedConnectionID: UUID?
     @Published private(set) var connectionPhase: ConnectionPhase = .unconfigured
@@ -98,6 +112,9 @@ final class AppViewModel: ObservableObject {
         }
 
         selectedConnectionID = snapshot.selectedConnectionID
+        healthChecksByConnectionID = Dictionary(uniqueKeysWithValues: savedConnections.compactMap { connection in
+            connection.healthCheck.map { (connection.id, $0) }
+        })
         rebuildSavedConnectionIndexes()
         rebuildSubscriptionSourceIndexes()
         normalizeSelection()
@@ -121,6 +138,10 @@ final class AppViewModel: ObservableObject {
 
     var manualConnections: [SavedConnection] {
         savedConnections.filter { $0.source == nil }
+    }
+
+    var manualConnectionPickerItems: [ConnectionPickerItem] {
+        connectionPickerItems.filter { $0.sourceID == nil }
     }
 
     var canConnect: Bool {
@@ -171,6 +192,18 @@ final class AppViewModel: ObservableObject {
         importedConnectionsBySourceID[sourceID] ?? []
     }
 
+    func importedConnectionPickerItems(for sourceID: UUID) -> [ConnectionPickerItem] {
+        connectionPickerItems.filter { $0.sourceID == sourceID }
+    }
+
+    var importedConnectionPickerItemsBySourceID: [UUID: [ConnectionPickerItem]] {
+        Dictionary(grouping: connectionPickerItems.compactMap { item -> ConnectionPickerItem? in
+            item.sourceID == nil ? nil : item
+        }) { item in
+            item.sourceID!
+        }
+    }
+
     func importedConnectionCount(for sourceID: UUID) -> Int {
         importedConnectionCountsBySourceID[sourceID] ?? 0
     }
@@ -193,19 +226,27 @@ final class AppViewModel: ObservableObject {
     }
 
     func healthCheck(for connection: SavedConnection) -> ConnectionHealthCheck {
-        if refreshingHealthConnectionIDs.contains(connection.id) {
-            var checking = connection.healthCheck ?? .unknown
+        healthCheck(for: connection.id)
+    }
+
+    func healthCheck(for connectionID: UUID) -> ConnectionHealthCheck {
+        let stored = healthChecksByConnectionID[connectionID]
+            ?? savedConnectionsByID[connectionID]?.healthCheck
+            ?? .unknown
+
+        if refreshingHealthConnectionIDs.contains(connectionID) {
+            var checking = stored
             checking.state = .checking
             return checking
         }
 
-        if queuedHealthConnectionIDs.contains(connection.id) {
-            var queued = connection.healthCheck ?? .unknown
+        if queuedHealthConnectionIDs.contains(connectionID) {
+            var queued = stored
             queued.state = .queued
             return queued
         }
 
-        return connection.healthCheck ?? .unknown
+        return stored
     }
 
     func healthSummary(for connection: SavedConnection) -> String {
@@ -228,7 +269,37 @@ final class AppViewModel: ObservableObject {
         case .checking:
             return "Checking…"
         case .unknown:
-            if let checkedAt = connection.healthCheck?.checkedAt {
+            if let checkedAt = healthCheck.checkedAt {
+                return "Unknown • checked \(Self.relativeFormatter.localizedString(for: checkedAt, relativeTo: Date()))"
+            }
+            return "Not checked"
+        }
+    }
+
+    func healthSnapshotForPicker() -> [UUID: ConnectionHealthCheck] {
+        Dictionary(uniqueKeysWithValues: connectionPickerItems.map { ($0.id, healthCheck(for: $0.id)) })
+    }
+
+    func healthSummary(for healthCheck: ConnectionHealthCheck) -> String {
+        switch healthCheck.state {
+        case .reachable:
+            if let latency = healthCheck.latencyMilliseconds {
+                switch healthCheck.latencyKind {
+                case .proxyRequest:
+                    return "Ping \(latency) ms"
+                case .tcpConnect, nil:
+                    return "TCP \(latency) ms"
+                }
+            }
+            return "Available"
+        case .unreachable:
+            return healthCheck.failureSummary ?? "Unavailable"
+        case .queued:
+            return "Queued…"
+        case .checking:
+            return "Checking…"
+        case .unknown:
+            if let checkedAt = healthCheck.checkedAt {
                 return "Unknown • checked \(Self.relativeFormatter.localizedString(for: checkedAt, relativeTo: Date()))"
             }
             return "Not checked"
@@ -272,6 +343,7 @@ final class AppViewModel: ObservableObject {
         }
 
         let removedConnection = savedConnections.remove(at: index)
+        healthChecksByConnectionID.removeValue(forKey: id)
         rebuildSavedConnectionIndexes()
         cancelHealthProbe(id: id)
         if selectedConnectionID == removedConnection.id {
@@ -296,6 +368,9 @@ final class AppViewModel: ObservableObject {
 
         savedConnections.removeAll { $0.source?.subscriptionSourceID == id }
         subscriptionSources.removeAll { $0.id == id }
+        for connection in affectedConnections {
+            healthChecksByConnectionID.removeValue(forKey: connection.id)
+        }
         rebuildSavedConnectionIndexes()
         rebuildSubscriptionSourceIndexes()
         refreshingSubscriptionIDs.remove(id)
@@ -371,7 +446,11 @@ final class AppViewModel: ObservableObject {
             }
 
             if urlChanged {
+                let removedConnections = savedConnections.filter { $0.source?.subscriptionSourceID == id }
                 savedConnections.removeAll { $0.source?.subscriptionSourceID == id }
+                for connection in removedConnections {
+                    healthChecksByConnectionID.removeValue(forKey: connection.id)
+                }
                 rebuildSavedConnectionIndexes()
                 if selectionBelongsToUpdatedSource {
                     normalizeSelection()
@@ -743,8 +822,13 @@ final class AppViewModel: ObservableObject {
             return
         }
 
+        let existingConnectionsForReconcile = savedConnections.map { connection in
+            var connection = connection
+            connection.healthCheck = healthChecksByConnectionID[connection.id] ?? connection.healthCheck
+            return connection
+        }
         let replacementResult = SubscriptionConnectionReconciler().reconcile(
-            existingConnections: savedConnections,
+            existingConnections: existingConnectionsForReconcile,
             sourceID: sourceID,
             selectedConnectionID: selectedConnectionID,
             importedEntries: importedEntries,
@@ -753,6 +837,7 @@ final class AppViewModel: ObservableObject {
         )
 
         savedConnections = replacementResult.savedConnections
+        syncHealthChecksFromSavedConnections()
         invalidateHealthChecksForImportedConnections(from: sourceID)
         rebuildSavedConnectionIndexes()
         selectedConnectionID = replacementResult.selectedConnectionID
@@ -844,12 +929,8 @@ final class AppViewModel: ObservableObject {
     private func applyHealthProbeResults(_ pendingResults: [UUID: ConnectionHealthProbeResult]) {
         guard !pendingResults.isEmpty else { return }
 
-        for (connectionID, result) in pendingResults {
-            guard let index = savedConnections.firstIndex(where: { $0.id == connectionID }) else {
-                continue
-            }
-
-            savedConnections[index].healthCheck = ConnectionHealthCheck(
+        for (connectionID, result) in pendingResults where savedConnectionsByID[connectionID] != nil {
+            healthChecksByConnectionID[connectionID] = ConnectionHealthCheck(
                 state: result.state,
                 checkedAt: result.checkedAt,
                 latencyMilliseconds: result.latencyMilliseconds,
@@ -858,7 +939,6 @@ final class AppViewModel: ObservableObject {
             )
         }
 
-        rebuildSavedConnectionIndexes()
         schedulePersist()
     }
 
@@ -871,9 +951,18 @@ final class AppViewModel: ObservableObject {
     }
 
     private func invalidateHealthChecksForImportedConnections(from sourceID: UUID) {
-        for index in savedConnections.indices
-        where savedConnections[index].source?.subscriptionSourceID == sourceID {
-            savedConnections[index].healthCheck = nil
+        for connection in savedConnections where connection.source?.subscriptionSourceID == sourceID {
+            healthChecksByConnectionID.removeValue(forKey: connection.id)
+        }
+    }
+
+    private func syncHealthChecksFromSavedConnections() {
+        let validIDs = Set(savedConnections.map(\.id))
+        healthChecksByConnectionID = healthChecksByConnectionID.filter { validIDs.contains($0.key) }
+        for connection in savedConnections {
+            if let healthCheck = connection.healthCheck {
+                healthChecksByConnectionID[connection.id] = healthCheck
+            }
         }
     }
 
@@ -885,6 +974,7 @@ final class AppViewModel: ObservableObject {
 
     private func rebuildSavedConnectionIndexes() {
         savedConnectionsByID = Dictionary(uniqueKeysWithValues: savedConnections.map { ($0.id, $0) })
+        connectionPickerItems = savedConnections.map(ConnectionPickerItem.init)
 
         let groupedImportedConnections = Dictionary(grouping: savedConnections) { connection in
             connection.source?.subscriptionSourceID
@@ -974,7 +1064,8 @@ final class AppViewModel: ObservableObject {
     private func makeSnapshot() -> AppSnapshot {
         let persistedConnections = savedConnections.map { connection in
             var normalizedConnection = connection
-            normalizedConnection.healthCheck = connection.healthCheck?.normalizedForPersistence
+            normalizedConnection.healthCheck = healthChecksByConnectionID[connection.id]?.normalizedForPersistence
+                ?? connection.healthCheck?.normalizedForPersistence
             return normalizedConnection
         }
 
