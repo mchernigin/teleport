@@ -3,27 +3,40 @@ import Foundation
 import SwiftUI
 
 struct AboutSettingsView: View {
-    @State private var xrayVersion = "Checking…"
+    @State private var xrayVersion: String
 
     private let sourceCodeURL = URL(string: "https://codeberg.org/chernigin/teleport")!
     private let issuesURL = URL(string: "https://codeberg.org/chernigin/teleport/issues")!
 
+    init() {
+        _xrayVersion = State(initialValue: Self.readXrayVersion())
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Teleport")
-                    .font(.largeTitle.weight(.semibold))
-                Text("A tiny macOS Xray menu bar client.")
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 16) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 72, height: 72)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Teleport")
+                        .font(.largeTitle.weight(.semibold))
+                    Text("A tiny Xray menu bar client.")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             VStack(alignment: .leading, spacing: 12) {
                 aboutRow("App version", appVersion)
+                aboutRow("Helper version", PrivilegedHelperConstants.version)
                 aboutRow("Xray version", xrayVersion)
+                aboutRow("Copyright", copyrightText)
+                aboutRow("License", "GPL-3.0-or-later")
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
 
             HStack(spacing: 10) {
                 Button("Source code") {
@@ -40,14 +53,16 @@ struct AboutSettingsView: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear {
-            refreshXrayVersion()
-        }
     }
 
     private var appVersion: String {
         let dictionary = Bundle.main.infoDictionary
         return dictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
+    }
+
+    private var copyrightText: String {
+        let year = Calendar.current.component(.year, from: Date())
+        return "© \(year) Michael Chernigin"
     }
 
     private func aboutRow(_ title: String, _ value: String) -> some View {
@@ -60,19 +75,6 @@ struct AboutSettingsView: View {
                     .textSelection(.enabled)
             }
         }
-    }
-
-    private func refreshXrayVersion() {
-        xrayVersion = "Checking…"
-        Task {
-            xrayVersion = await Self.detectXrayVersion()
-        }
-    }
-
-    private static func detectXrayVersion() async -> String {
-        await Task.detached(priority: .utility) {
-            readXrayVersion()
-        }.value
     }
 
     private nonisolated static func readXrayVersion() -> String {
