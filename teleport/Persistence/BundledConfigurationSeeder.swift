@@ -69,7 +69,8 @@ struct BundledConfigurationSeeder {
             proxyEndpoint: snapshot.proxyEndpoint,
             connectionMode: snapshot.connectionMode,
             subscriptionConnectionSort: snapshot.subscriptionConnectionSort,
-            showsLatencyInMenuBarPicker: snapshot.showsLatencyInMenuBarPicker
+            showsLatencyInMenuBarPicker: snapshot.showsLatencyInMenuBarPicker,
+            animatesMenuBarIcon: snapshot.animatesMenuBarIcon
         )
     }
 }

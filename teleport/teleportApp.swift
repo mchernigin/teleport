@@ -36,8 +36,10 @@ struct TeleportApp: App {
         } label: {
             MenuBarIconView(
                 phase: viewModel.connectionPhase,
-                proxyPhase: viewModel.proxyPhase
+                proxyPhase: viewModel.proxyPhase,
+                animates: viewModel.animatesMenuBarIcon
             )
+            .frame(width: 18, height: 18)
         }
         .menuBarExtraStyle(.window)
 

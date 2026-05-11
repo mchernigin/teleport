@@ -97,6 +97,16 @@ private struct GeneralSettingsView: View {
                     Text("Show latency in menu bar picker")
                     Text("Include latest health check latency next to connection names.")
                 }
+
+                Toggle(
+                    isOn: Binding(
+                        get: { viewModel.animatesMenuBarIcon },
+                        set: { viewModel.setAnimatesMenuBarIcon($0) }
+                    )
+                ) {
+                    Text("Animate menu bar icon")
+                    Text("Show subtle portal particles while Teleport is active. May impact performance.")
+                }
             }
 
             Section {

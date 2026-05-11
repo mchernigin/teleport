@@ -55,6 +55,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var connectionMode: ConnectionMode
     @Published private(set) var subscriptionConnectionSort: SubscriptionConnectionSort
     @Published private(set) var showsLatencyInMenuBarPicker: Bool
+    @Published private(set) var animatesMenuBarIcon: Bool
     @Published private(set) var startsAtLogin: Bool
     @Published private(set) var refreshingSubscriptionIDs: Set<UUID> = []
     @Published private(set) var refreshingHealthConnectionIDs: Set<UUID> = []
@@ -123,6 +124,7 @@ final class AppViewModel: ObservableObject {
         connectionMode = snapshot.connectionMode
         subscriptionConnectionSort = snapshot.subscriptionConnectionSort
         showsLatencyInMenuBarPicker = snapshot.showsLatencyInMenuBarPicker
+        animatesMenuBarIcon = snapshot.animatesMenuBarIcon
         startsAtLogin = loginItemService.isEnabled
         connectionBackend = connectionBackendFactory.makeBackend(for: snapshot.connectionMode)
         proxyEndpoint = snapshot.proxyEndpoint
@@ -541,6 +543,12 @@ final class AppViewModel: ObservableObject {
     func setShowsLatencyInMenuBarPicker(_ showsLatency: Bool) {
         guard showsLatency != showsLatencyInMenuBarPicker else { return }
         showsLatencyInMenuBarPicker = showsLatency
+        schedulePersist()
+    }
+
+    func setAnimatesMenuBarIcon(_ animates: Bool) {
+        guard animates != animatesMenuBarIcon else { return }
+        animatesMenuBarIcon = animates
         schedulePersist()
     }
 
@@ -1186,7 +1194,8 @@ final class AppViewModel: ObservableObject {
             proxyEndpoint: proxyEndpoint,
             connectionMode: connectionMode,
             subscriptionConnectionSort: subscriptionConnectionSort,
-            showsLatencyInMenuBarPicker: showsLatencyInMenuBarPicker
+            showsLatencyInMenuBarPicker: showsLatencyInMenuBarPicker,
+            animatesMenuBarIcon: animatesMenuBarIcon
         )
     }
 

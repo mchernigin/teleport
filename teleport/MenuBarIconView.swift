@@ -1,30 +1,67 @@
 import AppKit
+import Combine
 import SwiftUI
 
 struct MenuBarIconView: View {
     let phase: ConnectionPhase
     let proxyPhase: ProxyPhase
+    let animates: Bool
+    @State private var animationFrame = 0
+
+    private let animationTimer = Timer.publish(
+        every: 1.0 / MenuBarIconImageFactory.animationFPS,
+        on: .main,
+        in: .common
+    ).autoconnect()
 
     private var isConnected: Bool {
         proxyPhase == .enabled
     }
 
     var body: some View {
-        iconImage(time: 0, animated: false)
+        iconImage(frame: shouldAnimate ? animationFrame : 0, animated: shouldAnimate)
+            .onReceive(animationTimer) { _ in
+                guard shouldAnimate else {
+                    if animationFrame != 0 {
+                        animationFrame = 0
+                    }
+                    return
+                }
+                animationFrame = (animationFrame + 1) % MenuBarIconImageFactory.animationFrameCount
+            }
     }
 
-    private func iconImage(time: TimeInterval, animated: Bool) -> some View {
-        Image(nsImage: MenuBarIconImageFactory.image(for: phase, proxyPhase: proxyPhase, time: time, isAnimated: animated))
+    private var shouldAnimate: Bool {
+        animates && (proxyPhase == .enabled || phase == .starting || phase == .stopping)
+    }
+
+    private func iconImage(frame: Int, animated: Bool) -> some View {
+        Image(nsImage: MenuBarIconImageFactory.image(for: phase, proxyPhase: proxyPhase, frame: frame, isAnimated: animated))
             .renderingMode(.template)
+            .frame(width: MenuBarIconImageFactory.size.width, height: MenuBarIconImageFactory.size.height)
             .accessibilityLabel(isConnected ? "Teleport connected" : "Teleport")
     }
 }
 
 enum MenuBarIconImageFactory {
-    private static let size = NSSize(width: 18, height: 18)
-    private static let particleSeeds: [Double] = [0.0, 0.14, 0.28, 0.42, 0.56, 0.7, 0.84]
+    static let animationFPS = 8.0
+    static let animationFrameCount = 36
+    static let size = NSSize(width: 18, height: 18)
 
-    static func image(for phase: ConnectionPhase, proxyPhase: ProxyPhase, time: TimeInterval, isAnimated: Bool) -> NSImage {
+    private static let animationCycleDuration = 1.0 / 0.22
+    private static let particleSeeds: [Double] = [0.0, 0.14, 0.28, 0.42, 0.56, 0.7, 0.84]
+    private static var imageCache: [CacheKey: NSImage] = [:]
+
+    static func image(for phase: ConnectionPhase, proxyPhase: ProxyPhase, frame: Int, isAnimated: Bool) -> NSImage {
+        let normalizedFrame = isAnimated ? ((frame % animationFrameCount) + animationFrameCount) % animationFrameCount : 0
+        let key = CacheKey(phase: phase.rawValue, proxyPhase: proxyPhase.rawValue, frame: normalizedFrame, isAnimated: isAnimated)
+        if let cachedImage = imageCache[key] {
+            return cachedImage
+        }
+
+        let time = isAnimated
+            ? Double(normalizedFrame) / Double(animationFrameCount) * animationCycleDuration
+            : 0
         let image = NSImage(size: size)
         image.lockFocus()
 
@@ -50,7 +87,15 @@ enum MenuBarIconImageFactory {
 
         image.unlockFocus()
         image.isTemplate = true
+        imageCache[key] = image
         return image
+    }
+
+    private struct CacheKey: Hashable {
+        let phase: String
+        let proxyPhase: String
+        let frame: Int
+        let isAnimated: Bool
     }
 
     private static func drawParticles(time: TimeInterval) {
@@ -68,9 +113,9 @@ enum MenuBarIconImageFactory {
             let x = startX + (portalEntryX - startX) * progress
             let y = portalCenterY + driftY + wave * (1 - progress) * 2.8
 
-            let appear = min(max(cycle / 0.22, 0), 1)
-            let fade = min(max((1 - cycle) / 0.18, 0), 1)
-            let alpha = 0.24 + 0.52 * appear * fade
+            let appear = min(max(cycle / 0.16, 0), 1)
+            let portalFade = pow(1 - progress, 1.35)
+            let alpha = 0.9 * appear * portalFade
             let radius: CGFloat = 0.86 + 0.38 * (1 - progress)
             let rect = NSRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)
 
@@ -114,16 +159,16 @@ enum MenuBarIconImageFactory {
         }
 
         guard isAnimated else { return base }
-        return base + 0.06 * CGFloat(sin(time * 2.4))
+        return base + 0.06 * CGFloat(sin(time * 2 * .pi / animationCycleDuration))
     }
 }
 
 #Preview {
     VStack(spacing: 12) {
-        MenuBarIconView(phase: .unconfigured, proxyPhase: .disabled)
-        MenuBarIconView(phase: .stopped, proxyPhase: .disabled)
-        MenuBarIconView(phase: .running, proxyPhase: .disabled)
-        MenuBarIconView(phase: .running, proxyPhase: .enabled)
+        MenuBarIconView(phase: .unconfigured, proxyPhase: .disabled, animates: true)
+        MenuBarIconView(phase: .stopped, proxyPhase: .disabled, animates: true)
+        MenuBarIconView(phase: .running, proxyPhase: .disabled, animates: true)
+        MenuBarIconView(phase: .running, proxyPhase: .enabled, animates: true)
     }
     .padding()
 }
