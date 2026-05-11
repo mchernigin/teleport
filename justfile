@@ -7,7 +7,7 @@ helper_name := "dev.x.teleport.PrivilegedHelper"
 derived_data := "build/DerivedData"
 dist_dir := "build/dist"
 destination := "platform=macOS,arch=arm64"
-verify_sources := "teleport/TeleportModels.swift teleport/Connection/*.swift teleport/Parsing/*.swift teleport/Persistence/*.swift teleport/Subscriptions/*.swift teleport/Xray/*.swift teleport/Proxy/*.swift teleport/Health/*.swift teleport/ViewModels/*.swift Shared/PrivilegedHelperConstants.swift"
+verify_sources := "teleport/TeleportModels.swift teleport/App/*.swift teleport/Connection/*.swift teleport/Parsing/*.swift teleport/Persistence/*.swift teleport/Subscriptions/*.swift teleport/Xray/*.swift teleport/Proxy/*.swift teleport/Health/*.swift teleport/ViewModels/*.swift Shared/PrivilegedHelperConstants.swift"
 
 # List available recipes
 default:
