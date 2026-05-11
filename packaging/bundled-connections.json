@@ -9,7 +9,7 @@
     {
       "url": "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
       "displayName": "GitHub WL (igareck/vpn-configs-for-russia)",
-      "autoUpdateIntervalMinutes": 30,
+      "autoUpdateIntervalMinutes": 720,
       "filterDuplicateImports": true
     }
   ],
